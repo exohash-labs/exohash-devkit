@@ -1,0 +1,24 @@
+port: 4000
+seed: 42
+blockTimeMs: 500
+
+bankroll:
+  deposit: 1000000000000  # 1M USDC
+  name: "Default Bankroll"
+
+games:
+  - name: dice
+    wasm: wasm/dice-calc-v3.wasm
+    calcId: 1
+    houseEdgeBp: 200
+  - name: crash
+    wasm: wasm/crash-calc-v3.wasm
+    calcId: 2
+    houseEdgeBp: 200
+  - name: mines
+    wasm: wasm/mines-calc-v3.wasm
+    calcId: 3
+    houseEdgeBp: 200
+
+faucet:
+  amount: 100000000  # 100 USDC per request

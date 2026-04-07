@@ -1,0 +1,49 @@
+bffUrl: http://localhost:4000
+
+crash:
+  - name: well-done
+    stake: 1000000
+    cashout: 12000    # 1.2x
+  - name: medium-well
+    stake: 1000000
+    cashout: 15000    # 1.5x
+  - name: medium
+    stake: 1000000
+    cashout: 20000    # 2.0x
+  - name: medium-rare
+    stake: 1000000
+    cashout: 35000    # 3.5x
+  - name: rare
+    stake: 1000000
+    cashout: 50000    # 5.0x
+
+dice:
+  - name: cautious
+    stake: 500000
+    chanceBp: 7500    # 75% chance
+    every: 6
+  - name: balanced
+    stake: 1000000
+    chanceBp: 5000    # 50/50
+    every: 8
+  - name: gambler
+    stake: 2000000
+    chanceBp: 2500    # 25% chance
+    every: 10
+
+mines:
+  - name: careful
+    stake: 1000000
+    mines: 3
+    reveals: 2
+    every: 20
+  - name: explorer
+    stake: 1000000
+    mines: 5
+    reveals: 3
+    every: 25
+  - name: sweeper
+    stake: 2000000
+    mines: 1
+    reveals: 5
+    every: 15

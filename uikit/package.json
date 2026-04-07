@@ -1,0 +1,25 @@
+{
+  "name": "@exohash/uikit",
+  "version": "0.1.0",
+  "description": "React hooks and utilities for ExoHash game UIs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "playwright": "^1.59.1",
+    "react": "^18.2.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT"
+}
