@@ -8,12 +8,11 @@ func bpsOf(amount uint64, bps uint32) uint64 {
 	return amount * uint64(bps) / 10000
 }
 
-// ComputeFeeSplit computes the fee breakdown for a bet.
+// ComputeFeeSplit computes the flat fee breakdown from wagering volume.
 // Mirrors keeper.ComputeFeeSplit.
-func (c *Chain) ComputeFeeSplit(stake, edgeBp uint64) FeeSplit {
-	edge := bpsOf(stake, uint32(edgeBp))
-	feeTotal := bpsOf(edge, c.params.TakeRateOfEdgeBp)
-	valFee := bpsOf(feeTotal, c.params.FeeSplitValrewardsBp)
+func (c *Chain) ComputeFeeSplit(stake uint64) FeeSplit {
+	feeTotal := bpsOf(stake, c.params.ProtocolFeeBp)
+	valFee := bpsOf(stake, c.params.ValFeeBp)
 	protoFee := feeTotal - valFee
 
 	net := stake - feeTotal
@@ -131,8 +130,8 @@ func (c *Chain) placeBetLocked(betID uint64, addr string, bankrollID, calcID, st
 		return fmt.Errorf("calculator %d is not active (status=%d)", calcID, calc.Status)
 	}
 
-	// 4. Compute fee split.
-	split := c.ComputeFeeSplit(stake, calc.HouseEdgeBp)
+	// 4. Compute fee split (flat % of wagering volume).
+	split := c.ComputeFeeSplit(stake)
 
 	// 5. Escrow full stake from player.
 	acc.Balance -= stake

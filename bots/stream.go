@@ -11,13 +11,14 @@ import (
 
 // StreamEvent matches the mock-bff SSE protocol.
 type StreamEvent struct {
-	Height      uint64       `json:"height"`
-	Time        string       `json:"time,omitempty"`
-	CalcEvents  []CalcEvent  `json:"calcEvents,omitempty"`
-	BetsSettled []BetSettled `json:"betsSettled,omitempty"`
-	Connected   bool         `json:"connected,omitempty"`
-	Replay      *bool        `json:"replay,omitempty"`
-	Heartbeat   bool         `json:"heartbeat,omitempty"`
+	Height       uint64       `json:"height"`
+	Time         string       `json:"time,omitempty"`
+	BeaconPaused bool         `json:"beaconPaused,omitempty"`
+	CalcEvents   []CalcEvent  `json:"calcEvents,omitempty"`
+	BetsSettled  []BetSettled `json:"betsSettled,omitempty"`
+	Connected    bool         `json:"connected,omitempty"`
+	Replay       *bool        `json:"replay,omitempty"`
+	Heartbeat    bool         `json:"heartbeat,omitempty"`
 }
 
 type CalcEvent struct {

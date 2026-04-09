@@ -20,15 +20,22 @@ import (
 // ---------------------------------------------------------------------------
 
 type StreamEvent struct {
-	Height      uint64       `json:"height"`
-	Time        string       `json:"time,omitempty"`
-	BeaconSeed  string       `json:"beaconSeed,omitempty"`
-	BetsCreated []BetCreated `json:"betsCreated,omitempty"`
-	BetsSettled []BetSettled `json:"betsSettled,omitempty"`
-	CalcEvents  []CalcEvent  `json:"calcEvents,omitempty"`
-	Connected   bool         `json:"connected,omitempty"`
-	Replay      *bool        `json:"replay,omitempty"`
-	Heartbeat   bool         `json:"heartbeat,omitempty"`
+	Height       uint64        `json:"height"`
+	Time         string        `json:"time,omitempty"`
+	BeaconSeed   string        `json:"beaconSeed,omitempty"`
+	BeaconPaused bool          `json:"beaconPaused,omitempty"`
+	BetsCreated  []BetCreated  `json:"betsCreated,omitempty"`
+	BetsSettled  []BetSettled  `json:"betsSettled,omitempty"`
+	CalcEvents   []CalcEvent   `json:"calcEvents,omitempty"`
+	SystemEvents []SystemEvent `json:"systemEvents,omitempty"`
+	Connected    bool          `json:"connected,omitempty"`
+	Replay       *bool         `json:"replay,omitempty"`
+	Heartbeat    bool          `json:"heartbeat,omitempty"`
+}
+
+type SystemEvent struct {
+	Type string            `json:"type"`
+	Data map[string]string `json:"data"`
 }
 
 type BetCreated struct {
