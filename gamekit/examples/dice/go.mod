@@ -1,3 +1,3 @@
-module dice-calc-v3
+module dice
 
 go 1.22

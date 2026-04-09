@@ -86,6 +86,9 @@ type Chain struct {
 	calcEvents  []CalcEvent
 	settlements []Settlement
 
+	// KV storage usage per calculator (bytes).
+	kvUsage map[uint64]uint64
+
 	// WASM runtime + registered games.
 	wasmRT wazero.Runtime
 	games  map[uint64]*gameState
@@ -125,6 +128,7 @@ func NewWithParams(params Params, seed uint64) *Chain {
 		betGame:        make(map[uint64]uint64),
 		wakeups:        make(map[uint64][]uint64),
 		pendingActions: make(map[uint64][]byte),
+		kvUsage:        make(map[uint64]uint64),
 		nextBankrollID: 1,
 		nextBetID:      1,
 		seed:           seed,
@@ -155,6 +159,13 @@ func (c *Chain) Params() Params {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.params
+}
+
+// KVUsage returns the total KV bytes used by a calculator.
+func (c *Chain) KVUsage(calcID uint64) uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.kvUsage[calcID]
 }
 
 func sharesKey(bankrollID uint64, addr string) string {

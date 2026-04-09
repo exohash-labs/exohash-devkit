@@ -81,13 +81,22 @@ type FeeSplit struct {
 	BankrollNet uint64
 }
 
+// CalculatorStatus represents the lifecycle state of a calculator.
+type CalculatorStatus int
+
+const (
+	CalcStatusActive CalculatorStatus = 0
+	CalcStatusPaused CalculatorStatus = 1
+	CalcStatusKilled CalculatorStatus = 2
+)
+
 // Calculator mirrors x/house/types.CalculatorInfo.
 type Calculator struct {
 	ID          uint64
 	Name        string
 	Engine      string
 	HouseEdgeBp uint64
-	Active      bool
+	Status      CalculatorStatus
 }
 
 // UserShares tracks LP shares per address per bankroll.

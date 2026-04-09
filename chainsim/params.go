@@ -22,16 +22,26 @@ type Params struct {
 
 	// BankrollCreationFee: burned on bankroll creation (anti-spam).
 	BankrollCreationFee uint64
+
+	// MinStakeUusdc: minimum bet stake in uusdc (default 100_000 = 0.10 USDC).
+	MinStakeUusdc uint64
+
+	// MaxKVBytesPerCalculator: KV storage budget per calculator.
+	// Exceeding this kills the calculator and refunds all open bets.
+	// Default: 1_048_576 (1 MB).
+	MaxKVBytesPerCalculator uint64
 }
 
 // DefaultParams returns the chain defaults.
 func DefaultParams() Params {
 	return Params{
-		TakeRateOfEdgeBp:     2500,
-		FeeSplitValrewardsBp: 5000,
-		MaxPayoutCapBpsMax:   200,
-		MaxReservedBpsMax:    8000,
-		MinDepositAmount:     10_000_000, // 10 USDC
-		BankrollCreationFee:  0,
+		TakeRateOfEdgeBp:        2500,
+		FeeSplitValrewardsBp:    5000,
+		MaxPayoutCapBpsMax:      200,
+		MaxReservedBpsMax:       8000,
+		MinDepositAmount:        10_000_000,  // 10 USDC
+		BankrollCreationFee:     0,
+		MinStakeUusdc:           100_000,     // 0.10 USDC
+		MaxKVBytesPerCalculator: 1_048_576,   // 1 MB
 	}
 }

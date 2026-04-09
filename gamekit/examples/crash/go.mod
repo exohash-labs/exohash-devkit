@@ -1,3 +1,3 @@
-module crash-calc-v3
+module crash
 
 go 1.22

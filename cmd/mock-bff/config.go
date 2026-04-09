@@ -13,6 +13,7 @@ type Config struct {
 	Bankroll    BankrollCfg `yaml:"bankroll"`
 	Games       []GameCfg  `yaml:"games"`
 	Faucet      FaucetCfg  `yaml:"faucet"`
+	Chain       ChainCfg   `yaml:"chain"`
 }
 
 type BankrollCfg struct {
@@ -29,6 +30,11 @@ type GameCfg struct {
 
 type FaucetCfg struct {
 	Amount uint64 `yaml:"amount"`
+}
+
+type ChainCfg struct {
+	MaxKVBytesPerCalculator uint64 `yaml:"maxKvBytesPerCalculator"`
+	MinStakeUusdc           uint64 `yaml:"minStakeUusdc"`
 }
 
 func LoadConfig(path string) (*Config, error) {

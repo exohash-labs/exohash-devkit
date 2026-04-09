@@ -98,9 +98,12 @@ func (c *Chain) BetAction(addr string, betID uint64, action []byte) error {
 
 // placeBetLocked is the shared implementation. Caller must hold c.mu.
 func (c *Chain) placeBetLocked(betID uint64, addr string, bankrollID, calcID, stake uint64, params []byte) error {
-	// 1. Validate stake > 0 and account balance.
+	// 1. Validate stake meets minimum and account balance.
 	if stake == 0 {
 		return fmt.Errorf("stake must be > 0")
+	}
+	if c.params.MinStakeUusdc > 0 && stake < c.params.MinStakeUusdc {
+		return fmt.Errorf("stake %d below minimum %d", stake, c.params.MinStakeUusdc)
 	}
 	acc, ok := c.accounts[addr]
 	if !ok {
@@ -124,8 +127,8 @@ func (c *Chain) placeBetLocked(betID uint64, addr string, bankrollID, calcID, st
 	if !ok {
 		return fmt.Errorf("calculator %d not found", calcID)
 	}
-	if !calc.Active {
-		return fmt.Errorf("calculator %d is inactive", calcID)
+	if calc.Status != CalcStatusActive {
+		return fmt.Errorf("calculator %d is not active (status=%d)", calcID, calc.Status)
 	}
 
 	// 4. Compute fee split.

@@ -32,19 +32,23 @@ type StreamEvent struct {
 }
 
 type BetCreated struct {
-	BetID      uint64 `json:"betId"`
-	BankrollID uint64 `json:"bankrollId"`
-	Bettor     string `json:"bettor"`
-	Stake      string `json:"stake"`
-	Denom      string `json:"denom"`
+	BetID        uint64 `json:"betId"`
+	BankrollID   uint64 `json:"bankrollId"`
+	CalculatorID uint64 `json:"calculatorId"`
+	Bettor       string `json:"bettor"`
+	Stake        string `json:"stake"`
+	Denom        string `json:"denom"`
 }
 
 type BetSettled struct {
 	BetID      uint64 `json:"betId"`
 	GameID     uint64 `json:"gameId"`
 	BankrollID uint64 `json:"bankrollId"`
+	Bettor     string `json:"bettor"`
 	Payout     string `json:"payout"`
 	PayoutKind int    `json:"payoutKind"`
+	NetStake   string `json:"netStake"`
+	Profit     string `json:"profit"`
 	Height     int64  `json:"height"`
 }
 
@@ -55,11 +59,12 @@ type CalcEvent struct {
 }
 
 type GameInfo struct {
-	CalcID    uint64                                `json:"calcId"`
-	Name      string                                `json:"name"`
-	Engine    string                                `json:"engine,omitempty"`
-	HouseEdge int                                   `json:"houseEdgeBp,omitempty"`
-	Errors    map[string]map[string]string           `json:"errors,omitempty"`
+	CalcID      uint64                              `json:"calcId"`
+	Name        string                              `json:"name"`
+	Engine      string                              `json:"engine,omitempty"`
+	HouseEdgeBp int                                 `json:"houseEdgeBp,omitempty"`
+	Status      int                                 `json:"status"` // 0=active, 1=paused, 2=killed
+	Errors      map[string]map[string]string        `json:"errors,omitempty"`
 }
 
 type SubFilter struct {
@@ -95,7 +100,7 @@ func NewServer(chain *chainsim.Chain, cfg *Config) *Server {
 
 	// Build game info cache.
 	for _, g := range cfg.Games {
-		info := GameInfo{CalcID: g.CalcID, Name: g.Name, HouseEdge: int(g.HouseEdgeBp)}
+		info := GameInfo{CalcID: g.CalcID, Name: g.Name, HouseEdgeBp: int(g.HouseEdgeBp), Status: 0}
 		// Try to get engine + errors from WASM info.
 		if raw, err := chain.GameInfo(g.CalcID); err == nil && raw != nil {
 			var meta struct {
@@ -243,11 +248,12 @@ func (s *Server) handlePlaceBet(w http.ResponseWriter, r *http.Request) {
 		Height: s.chain.Height(),
 		Time:   time.Now().UTC().Format(time.RFC3339),
 		BetsCreated: []BetCreated{{
-			BetID:      betID,
-			BankrollID: req.BankrollID,
-			Bettor:     req.Address,
-			Stake:      fmt.Sprintf("%d", stake),
-			Denom:      "uusdc",
+			BetID:        betID,
+			BankrollID:   req.BankrollID,
+			CalculatorID: req.CalculatorID,
+			Bettor:       req.Address,
+			Stake:        fmt.Sprintf("%d", stake),
+			Denom:        "uusdc",
 		}},
 	}
 	for _, e := range wasmEvents {
@@ -402,7 +408,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 				"gameId": b.CalculatorID,
 				"stake":  b.Stake,
 				"payout": b.Payout,
-				"status": b.Status.String(),
+				"status": betStatusString(b),
 			})
 		}
 		jsonResponse(w, out)
@@ -435,7 +441,7 @@ func (s *Server) handleBetState(w http.ResponseWriter, r *http.Request) {
 		"gameId": bet.CalculatorID,
 		"stake":  bet.Stake,
 		"payout": bet.Payout,
-		"status": bet.Status.String(),
+		"status": betStatusString(*bet),
 		"events": events,
 	})
 }
@@ -481,11 +487,16 @@ func (s *Server) advanceBlock() {
 
 	var settled []BetSettled
 	for _, st := range result.Settlements {
+		bet := s.chain.GetBet(st.BetID)
 		gameID := st.CalcID
-		if gameID == 0 {
-			if bet := s.chain.GetBet(st.BetID); bet != nil {
+		var bettor string
+		var netStake uint64
+		if bet != nil {
+			if gameID == 0 {
 				gameID = bet.CalculatorID
 			}
+			bettor = bet.Bettor
+			netStake = bet.NetStake
 		}
 		kind := 2
 		if st.Payout > 0 {
@@ -494,12 +505,17 @@ func (s *Server) advanceBlock() {
 		if st.Kind == 3 {
 			kind = 3
 		}
+		// Profit from bankroll perspective: stake kept minus payout.
+		profit := int64(netStake) - int64(st.Payout)
 		settled = append(settled, BetSettled{
 			BetID:      st.BetID,
 			GameID:     gameID,
 			BankrollID: 1,
+			Bettor:     bettor,
 			Payout:     fmt.Sprintf("%d", st.Payout),
 			PayoutKind: kind,
+			NetStake:   fmt.Sprintf("%d", netStake),
+			Profit:     fmt.Sprintf("%d", profit),
 			Height:     int64(block.Height),
 		})
 	}
@@ -645,4 +661,21 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]any{"error": msg, "code": code})
+}
+
+// betStatusString maps chainsim bet status to real BFF status strings.
+func betStatusString(b chainsim.Bet) string {
+	switch b.Status {
+	case chainsim.BetOpen:
+		return "open"
+	case chainsim.BetSettled:
+		if b.Payout > 0 {
+			return "win"
+		}
+		return "loss"
+	case chainsim.BetRefunded:
+		return "refund"
+	default:
+		return "open"
+	}
 }

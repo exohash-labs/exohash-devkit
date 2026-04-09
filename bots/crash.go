@@ -12,9 +12,17 @@ type CrashBot struct {
 	stake      uint64
 	targetMult uint64
 	betID      uint64
-	active     bool
-	wantJoin   bool
+	state      crashState // idle → joining → active → cashed → idle
 }
+
+type crashState int
+
+const (
+	crashIdle    crashState = iota
+	crashJoining            // PlaceBet sent, waiting for SetBetID
+	crashActive             // in round, watching multiplier
+	crashCashed             // cashout sent, waiting for round end
+)
 
 type CrashBotConfig struct {
 	Address string
@@ -29,7 +37,7 @@ func NewCrashBot(cfg CrashBotConfig) *CrashBot {
 		calcID:     cfg.CalcID,
 		stake:      cfg.Stake,
 		targetMult: cfg.Cashout,
-		wantJoin:   true,
+		state:      crashIdle,
 	}
 }
 
@@ -38,42 +46,35 @@ func (b *CrashBot) CalcID() uint64  { return b.calcID }
 
 func (b *CrashBot) SetBetID(id uint64) {
 	b.betID = id
-	b.active = true
-	b.wantJoin = false
+	b.state = crashActive
 }
 
 func (b *CrashBot) OnEvent(topic string, data json.RawMessage) Action {
-	switch topic {
-	case "state":
-		var d struct {
-			Phase  string `json:"phase"`
-			MultBP uint64 `json:"mult_bp"`
-		}
-		json.Unmarshal(data, &d)
-
-		switch d.Phase {
-		case "open":
-			if !b.active && !b.wantJoin {
-				b.betID = 0
-				b.wantJoin = true
-			}
-		case "tick":
-			if b.active && b.targetMult > 0 && d.MultBP >= b.targetMult {
-				fmt.Printf("BOT %s: CASHOUT at %d betID=%d\n", b.addr, d.MultBP, b.betID)
-				return BetAction(b.betID, []byte{1})
-			}
-		case "crashed":
-			b.active = false
-		}
-		return None()
-
-	case "block":
-		if b.wantJoin && !b.active {
-			return PlaceBet(b.stake, nil)
-		}
-		return None()
-
-	default:
+	if topic != "state" {
 		return None()
 	}
+
+	var d struct {
+		Phase  string `json:"phase"`
+		MultBP uint64 `json:"mult_bp"`
+	}
+	json.Unmarshal(data, &d)
+
+	switch d.Phase {
+	case "open":
+		if b.state == crashIdle {
+			b.state = crashJoining
+			return PlaceBet(b.stake, nil)
+		}
+	case "tick":
+		if b.state == crashActive && b.targetMult > 0 && d.MultBP >= b.targetMult {
+			fmt.Printf("BOT %s: CASHOUT at %d betID=%d\n", b.addr, d.MultBP, b.betID)
+			b.state = crashCashed
+			return BetAction(b.betID, []byte{1})
+		}
+	case "crashed":
+		b.state = crashIdle
+		b.betID = 0
+	}
+	return None()
 }

@@ -198,8 +198,8 @@ func (c *Chain) AttachGame(bankrollID, calcID uint64) error {
 	if !ok {
 		return fmt.Errorf("calculator %d not found", calcID)
 	}
-	if !calc.Active {
-		return fmt.Errorf("calculator %d is inactive", calcID)
+	if calc.Status == CalcStatusKilled {
+		return fmt.Errorf("calculator %d is killed", calcID)
 	}
 
 	br.Games[calcID] = true

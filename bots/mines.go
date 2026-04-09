@@ -5,6 +5,9 @@ import (
 	"math/rand"
 )
 
+// Fixed tile reveal order — avoids "already revealed" errors.
+var revealOrder = []byte{2, 1, 16, 15, 11}
+
 // MinesBot plays mines — starts a game, reveals tiles, cashes out.
 type MinesBot struct {
 	addr          string
@@ -89,8 +92,8 @@ func (b *MinesBot) OnEvent(topic string, data json.RawMessage) Action {
 		if b.revealed >= b.maxReveals {
 			return BetAction(b.betID, []byte{2}) // cashout
 		}
-		tile := b.rng.Intn(25)
-		return BetAction(b.betID, []byte{1, byte(tile)})
+		tile := revealOrder[b.revealed%len(revealOrder)]
+		return BetAction(b.betID, []byte{1, tile})
 
 	case "settled":
 		var d struct {
@@ -107,8 +110,8 @@ func (b *MinesBot) OnEvent(topic string, data json.RawMessage) Action {
 		if b.active && b.pendingReveal {
 			b.pendingReveal = false
 			b.waiting = true
-			tile := b.rng.Intn(25)
-			return BetAction(b.betID, []byte{1, byte(tile)})
+			tile := revealOrder[0]
+			return BetAction(b.betID, []byte{1, tile})
 		}
 		if !b.active && !b.waiting {
 			b.counter++

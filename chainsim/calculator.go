@@ -22,7 +22,7 @@ func (c *Chain) RegisterCalculator(calc Calculator) error {
 		}
 	}
 
-	calc.Active = true
+	calc.Status = CalcStatusActive
 	c.calculators[calc.ID] = &calc
 	return nil
 }
@@ -39,9 +39,8 @@ func (c *Chain) GetCalculator(calcID uint64) (*Calculator, error) {
 	return calc, nil
 }
 
-// KillCalculator marks a calculator as inactive (fraud detection).
-// Mirrors keeper.KillCalculator.
-func (c *Chain) KillCalculator(calcID uint64) error {
+// PauseCalculator stops new bets but lets existing bets settle normally.
+func (c *Chain) PauseCalculator(calcID uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -49,6 +48,66 @@ func (c *Chain) KillCalculator(calcID uint64) error {
 	if !ok {
 		return fmt.Errorf("calculator %d not found", calcID)
 	}
-	calc.Active = false
+	if calc.Status == CalcStatusKilled {
+		return fmt.Errorf("calculator %d is killed, cannot pause", calcID)
+	}
+	calc.Status = CalcStatusPaused
+	c.emit("calculator_paused", "calculator_id", u64(calcID))
 	return nil
+}
+
+// ResumeCalculator re-enables new bets on a paused calculator.
+func (c *Chain) ResumeCalculator(calcID uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	calc, ok := c.calculators[calcID]
+	if !ok {
+		return fmt.Errorf("calculator %d not found", calcID)
+	}
+	if calc.Status != CalcStatusPaused {
+		return fmt.Errorf("calculator %d is not paused", calcID)
+	}
+	calc.Status = CalcStatusActive
+	c.emit("calculator_resumed", "calculator_id", u64(calcID))
+	return nil
+}
+
+// KillCalculator permanently kills a calculator and refunds all open bets.
+func (c *Chain) KillCalculator(calcID uint64, reason string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.killCalculatorLocked(calcID, reason)
+}
+
+func (c *Chain) killCalculatorLocked(calcID uint64, reason string) error {
+	calc, ok := c.calculators[calcID]
+	if !ok {
+		return fmt.Errorf("calculator %d not found", calcID)
+	}
+	calc.Status = CalcStatusKilled
+	c.emit("calculator_killed",
+		"calculator_id", u64(calcID),
+		"reason", reason,
+	)
+
+	// Refund all open bets for this calculator.
+	c.refundOpenBetsLocked(calcID)
+	return nil
+}
+
+// refundOpenBetsLocked settles all open bets as refunds. Caller must hold c.mu.
+func (c *Chain) refundOpenBetsLocked(calcID uint64) {
+	savedMode := c.mode
+	c.mode = CalcModeBlockUpdate
+
+	for betID, bet := range c.bets {
+		if bet.CalculatorID != calcID || bet.Status != BetOpen {
+			continue
+		}
+		_ = c.settleLocked(betID, 0, SettleKindRefund)
+	}
+
+	c.mode = savedMode
 }

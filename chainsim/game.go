@@ -72,7 +72,7 @@ func (c *Chain) RegisterGame(calcID uint64, wasmBytes []byte, name string, house
 		Name:        gameName,
 		Engine:      engine,
 		HouseEdgeBp: edgeBp,
-		Active:      true,
+		Status:      CalcStatusActive,
 	}
 	// Remove existing calculator if re-registering.
 	delete(c.calculators, calcID)

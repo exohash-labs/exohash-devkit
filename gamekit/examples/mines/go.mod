@@ -1,3 +1,3 @@
-module mines-calc-v3
+module mines
 
 go 1.22

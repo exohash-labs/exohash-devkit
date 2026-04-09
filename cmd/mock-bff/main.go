@@ -24,7 +24,14 @@ func main() {
 	}
 
 	// Initialize chain simulator.
-	chain := chainsim.NewWithParams(chainsim.DefaultParams(), cfg.Seed)
+	params := chainsim.DefaultParams()
+	if cfg.Chain.MaxKVBytesPerCalculator > 0 {
+		params.MaxKVBytesPerCalculator = cfg.Chain.MaxKVBytesPerCalculator
+	}
+	if cfg.Chain.MinStakeUusdc > 0 {
+		params.MinStakeUusdc = cfg.Chain.MinStakeUusdc
+	}
+	chain := chainsim.NewWithParams(params, cfg.Seed)
 	defer chain.Close()
 
 	// Set up LP + bankroll.

@@ -285,7 +285,25 @@ func hostKVSet(ctx context.Context, mod api.Module, stack []uint64) {
 	mem := mod.Memory()
 	keyBytes, _ := mem.Read(keyPtr, keyLen)
 	valBytes, _ := mem.Read(valPtr, valLen)
-	kvStoreFromCtx(ctx).Set(keyBytes, valBytes)
+
+	store := kvStoreFromCtx(ctx)
+	c := chainFromCtx(ctx)
+	if c != nil {
+		writeBytes := uint64(len(keyBytes) + len(valBytes))
+		var oldBytes uint64
+		if old, ok := store.Get(keyBytes); ok {
+			oldBytes = uint64(len(keyBytes) + len(old))
+		}
+		calcID := c.activeCalcID
+		newUsage := c.kvUsage[calcID] - oldBytes + writeBytes
+		budget := c.params.MaxKVBytesPerCalculator
+		if budget > 0 && newUsage > budget {
+			_ = c.killCalculatorLocked(calcID, "kv_budget_exceeded")
+			return
+		}
+		c.kvUsage[calcID] = newUsage
+	}
+	store.Set(keyBytes, valBytes)
 }
 
 func hostKVHas(ctx context.Context, mod api.Module, stack []uint64) {

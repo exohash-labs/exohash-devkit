@@ -198,7 +198,21 @@ func settleBet(betID, height uint64) {
 
 //export info
 func info() *byte {
-	data := []byte(`{"name":"Dice v3","engine":"dice","mode":"v3","house_edge_bp":200,"developer":"ExoHash","description":"Provably fair dice — host-callback protocol"}`)
+	data := []byte(`{
+		"name":"Dice v3",
+		"engine":"dice",
+		"mode":"v3",
+		"house_edge_bp":200,
+		"developer":"ExoHash",
+		"description":"Provably fair dice — single bet, single outcome, next-block settlement",
+		"errors":{
+			"place_bet":{
+				"1":"Invalid parameters — expected sender(20) + mode(1) + threshold(8)",
+				"2":"Chance out of range — must be between 1% and 98%",
+				"3":"Insufficient bankroll liquidity"
+			}
+		}
+	}`)
 	result := make([]byte, 4+len(data))
 	binary.LittleEndian.PutUint32(result[0:4], uint32(len(data)))
 	copy(result[4:], data)

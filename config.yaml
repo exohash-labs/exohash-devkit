@@ -8,15 +8,15 @@ bankroll:
 
 games:
   - name: dice
-    wasm: wasm/dice-calc-v3.wasm
+    wasm: wasm/dice.wasm
     calcId: 1
     houseEdgeBp: 200
   - name: crash
-    wasm: wasm/crash-calc-v3.wasm
+    wasm: wasm/crash.wasm
     calcId: 2
     houseEdgeBp: 200
   - name: mines
-    wasm: wasm/mines-calc-v3.wasm
+    wasm: wasm/mines.wasm
     calcId: 3
     houseEdgeBp: 200
 
