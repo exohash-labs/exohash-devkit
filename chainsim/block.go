@@ -39,6 +39,7 @@ func (c *Chain) AdvanceBlock() BlockResult {
 		if err := game.inst.callBlockUpdate(ctx, seed[:]); err != nil {
 			fmt.Printf("block_update error (calc=%d, h=%d): %v\n", calcID, c.height, err)
 		}
+		c.reinstantiateIfNeeded(calcID)
 	}
 
 	// Drain events while still holding the lock — prevents concurrent

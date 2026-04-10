@@ -47,6 +47,7 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 
 		ctx, _, _ := c.wasmCtxForGame(calcID)
 		status, err := game.inst.callPlaceBet(ctx, betID, bankrollID, calcID, stake, fullParams)
+		c.reinstantiateIfNeeded(calcID)
 		if err != nil || status != 0 {
 			// WASM rejected — refund.
 			c.mode = CalcModeBetAction
@@ -85,6 +86,7 @@ func (c *Chain) BetAction(addr string, betID uint64, action []byte) error {
 	c.activeCalcID = bet.CalculatorID
 	ctx, _, _ := c.wasmCtxForGame(bet.CalculatorID)
 	status, err := game.inst.callBetAction(ctx, betID, action)
+	c.reinstantiateIfNeeded(bet.CalculatorID)
 	if err != nil {
 		return fmt.Errorf("bet_action: %w", err)
 	}

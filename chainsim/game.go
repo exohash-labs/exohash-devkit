@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/tetratelabs/wazero"
 )
 
 // gameState holds a compiled WASM game module and its persistent instance.
 type gameState struct {
-	calcID   uint64
-	compiled interface{} // wazero.CompiledModule (stored as interface to avoid nil type issues)
-	inst     *wasmInstance
-	kv       *MemKVStore
+	calcID    uint64
+	compiled  interface{} // wazero.CompiledModule (stored as interface to avoid nil type issues)
+	inst      *wasmInstance
+	kv        *MemKVStore
+	allocCount uint64 // track alloc calls for periodic re-instantiation
 }
 
 // RegisterGame compiles a WASM calculator and registers it with the chain.
@@ -161,4 +164,40 @@ func (c *Chain) wasmCtxForGame(calcID uint64) (context.Context, *gameState, erro
 	}
 	ctx := withChain(withKVStore(context.Background(), game.kv), c)
 	return ctx, game, nil
+}
+
+// reinstantiateThreshold controls how many alloc calls before we recycle the
+// WASM instance to reclaim linear memory. Wazero's linear memory only grows,
+// never shrinks within a single module instance.
+const reinstantiateThreshold = 5000
+
+// reinstantiateIfNeeded closes the current WASM instance and creates a fresh
+// one from the compiled module, preserving KV state. Caller must hold c.mu.
+func (c *Chain) reinstantiateIfNeeded(calcID uint64) {
+	game, ok := c.games[calcID]
+	if !ok {
+		return
+	}
+	game.allocCount++
+	if game.allocCount < reinstantiateThreshold {
+		return
+	}
+	game.allocCount = 0
+
+	ctx := withChain(withKVStore(context.Background(), game.kv), c)
+	compiled, ok := game.compiled.(wazero.CompiledModule)
+	if !ok {
+		return
+	}
+
+	// Close old instance.
+	game.inst.close(ctx)
+
+	// Create fresh instance — KV store is external, so state is preserved.
+	inst, err := instantiateModule(ctx, c.wasmRT, compiled)
+	if err != nil {
+		fmt.Printf("reinstantiate error (calc=%d): %v\n", calcID, err)
+		return
+	}
+	game.inst = inst
 }
