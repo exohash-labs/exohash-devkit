@@ -31,22 +31,15 @@ func (c *Chain) AdvanceBlock() BlockResult {
 		BeaconSeed: seed,
 	}
 
-	// Process WASM wakeups — mirrors keeper ProcessV3BetWakeups.
+	// Call block_update(seed) for every registered game — v2 protocol.
 	c.mode = CalcModeBlockUpdate
-	byCalc := c.collectWakeupsByCalcLocked(c.height)
-	for calcID, ids := range byCalc {
-		game, ok := c.games[calcID]
-		if !ok {
-			continue
-		}
+	for calcID, game := range c.games {
 		c.activeCalcID = calcID
-		c.wakeupBetIDs = ids
 		ctx, _, _ := c.wasmCtxForGame(calcID)
-		if err := game.inst.callBlockUpdate(ctx, c.height); err != nil {
+		if err := game.inst.callBlockUpdate(ctx, seed[:]); err != nil {
 			fmt.Printf("block_update error (calc=%d, h=%d): %v\n", calcID, c.height, err)
 		}
 	}
-	c.wakeupBetIDs = nil
 
 	// Drain events while still holding the lock — prevents concurrent
 	// PlaceBet/BetAction from stealing block_update events.

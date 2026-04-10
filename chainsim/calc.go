@@ -93,16 +93,11 @@ func newWasmRuntime(ctx context.Context) (wazero.Runtime, error) {
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostKVHas), []api.ValueType{u32, u32}, []api.ValueType{u32}).Export("kv_has").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostKVDelete), []api.ValueType{u32, u32}, []api.ValueType{}).Export("kv_delete").
 		// Scheduling
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostScheduleWakeup), []api.ValueType{u64, u64}, []api.ValueType{}).Export("schedule_wakeup").
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostCancelWakeup), []api.ValueType{u64}, []api.ValueType{}).Export("cancel_wakeup").
 		// Financial
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostReserve), []api.ValueType{u64, u64}, []api.ValueType{u32}).Export("reserve").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostSettle), []api.ValueType{u64, u64, u32}, []api.ValueType{u32}).Export("settle").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostIncreaseStake), []api.ValueType{u64, u64}, []api.ValueType{u32}).Export("increase_stake").
 		// Data
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetRNG), []api.ValueType{u64, u32}, []api.ValueType{u32}).Export("get_rng").
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetBetCount), []api.ValueType{}, []api.ValueType{u32}).Export("get_bet_count").
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetBetID), []api.ValueType{u32}, []api.ValueType{u64}).Export("get_bet_id").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetBet), []api.ValueType{u64, u32}, []api.ValueType{u32}).Export("get_bet").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetPendingAction), []api.ValueType{u64, u32}, []api.ValueType{u32}).Export("get_pending_action").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetBettor), []api.ValueType{u64, u32}, []api.ValueType{u32}).Export("get_bettor").
@@ -205,8 +200,19 @@ func (w *wasmInstance) callBetAction(ctx context.Context, betID uint64, action [
 	return uint32(res[0]), nil
 }
 
-func (w *wasmInstance) callBlockUpdate(ctx context.Context, height uint64) error {
-	_, err := w.fnBlockUpdate.Call(ctx, height)
+func (w *wasmInstance) callBlockUpdate(ctx context.Context, seed []byte) error {
+	if len(seed) > 0 {
+		// Write seed to WASM memory via alloc.
+		results, err := w.fnAlloc.Call(ctx, uint64(len(seed)))
+		if err != nil {
+			return err
+		}
+		seedPtr := uint32(results[0])
+		w.mod.Memory().Write(seedPtr, seed)
+		_, err = w.fnBlockUpdate.Call(ctx, uint64(seedPtr), uint64(len(seed)))
+		return err
+	}
+	_, err := w.fnBlockUpdate.Call(ctx, 0, 0)
 	return err
 }
 
@@ -328,18 +334,6 @@ func hostKVDelete(ctx context.Context, mod api.Module, stack []uint64) {
 	kvStoreFromCtx(ctx).Delete(keyBytes)
 }
 
-func hostScheduleWakeup(ctx context.Context, _ api.Module, stack []uint64) {
-	if c := chainFromCtx(ctx); c != nil {
-		c.scheduleWakeupLocked(stack[0], stack[1])
-	}
-}
-
-func hostCancelWakeup(ctx context.Context, _ api.Module, stack []uint64) {
-	if c := chainFromCtx(ctx); c != nil {
-		c.cancelWakeupLocked(stack[0])
-	}
-}
-
 func hostReserve(ctx context.Context, _ api.Module, stack []uint64) {
 	c := chainFromCtx(ctx)
 	if c == nil {
@@ -377,43 +371,6 @@ func hostIncreaseStake(ctx context.Context, _ api.Module, stack []uint64) {
 		return
 	}
 	stack[0] = 0
-}
-
-func hostGetRNG(ctx context.Context, mod api.Module, stack []uint64) {
-	c := chainFromCtx(ctx)
-	if c == nil {
-		stack[0] = 0
-		return
-	}
-	seed := c.getRNGLocked(stack[0])
-	if seed == nil || len(seed) != 32 {
-		stack[0] = 0
-		return
-	}
-	outPtr := uint32(stack[1])
-	if !mod.Memory().Write(outPtr, seed) {
-		stack[0] = 0
-		return
-	}
-	stack[0] = 1
-}
-
-func hostGetBetCount(ctx context.Context, _ api.Module, stack []uint64) {
-	c := chainFromCtx(ctx)
-	if c == nil {
-		stack[0] = 0
-		return
-	}
-	stack[0] = uint64(c.getBetCountLocked())
-}
-
-func hostGetBetID(ctx context.Context, _ api.Module, stack []uint64) {
-	c := chainFromCtx(ctx)
-	if c == nil {
-		stack[0] = 0
-		return
-	}
-	stack[0] = c.getBetIDLocked(uint32(stack[0]))
 }
 
 func hostGetBet(ctx context.Context, mod api.Module, stack []uint64) {
