@@ -331,7 +331,22 @@ func hostKVHas(ctx context.Context, mod api.Module, stack []uint64) {
 func hostKVDelete(ctx context.Context, mod api.Module, stack []uint64) {
 	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
 	keyBytes, _ := mod.Memory().Read(keyPtr, keyLen)
-	kvStoreFromCtx(ctx).Delete(keyBytes)
+
+	store := kvStoreFromCtx(ctx)
+	c := chainFromCtx(ctx)
+	if c != nil {
+		// Decrement usage before deleting.
+		if old, ok := store.Get(keyBytes); ok {
+			oldBytes := uint64(len(keyBytes) + len(old))
+			calcID := c.activeCalcID
+			if usage := c.kvUsage[calcID]; usage >= oldBytes {
+				c.kvUsage[calcID] = usage - oldBytes
+			} else {
+				c.kvUsage[calcID] = 0
+			}
+		}
+	}
+	store.Delete(keyBytes)
 }
 
 func hostReserve(ctx context.Context, _ api.Module, stack []uint64) {
