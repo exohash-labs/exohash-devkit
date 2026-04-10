@@ -1,21 +1,13 @@
-// Mines calculator v3 — host-callback protocol.
+// Mines calculator — WASM protocol v2.
 //
 // 5x5 minefield. Player reveals tiles, avoids mines, cashes out.
 //
-// Rules:
-//   - Max 5 reveals, then auto-cashout
-//   - 40 blocks (~20s) inactivity timeout:
-//     - If revealed > 0 → auto-cashout at current multiplier
-//     - If revealed == 0 → refund
-//   - Mine placement per-reveal: P(mine) = mines_remaining / tiles_remaining
-//
-// Events:
-//   state   — every block_update: {phase, bet_id, mines, revealed, mult_bp, payout, timeout_left}
-//   joined  — on place_bet: {bet_id, addr, stake, mines}
-//   reveal  — on tile reveal: {bet_id, addr, tile, safe, revealed, mult_bp, payout}
-//   settled — on game end: {bet_id, addr, payout, kind, reason}
+// block_update receives DKG seed directly (no get_rng, no wakeups).
+// Game tracks active bets in KV, processes them each block.
 //
 // Exports: alloc, dealloc, place_bet, bet_action, block_update, query, info, init_game
+// Imports: env.kv_get, env.kv_set, env.kv_delete,
+//          env.reserve, env.settle, env.get_bettor, env.emit_event
 package main
 
 import (
@@ -33,26 +25,14 @@ func kv_get(keyPtr, keyLen uint32) uint64
 //go:wasmimport env kv_set
 func kv_set(keyPtr, keyLen, valPtr, valLen uint32)
 
-//go:wasmimport env schedule_wakeup
-func schedule_wakeup(betID, height uint64)
-
-//go:wasmimport env cancel_wakeup
-func cancel_wakeup(betID uint64)
+//go:wasmimport env kv_delete
+func host_kv_delete(keyPtr, keyLen uint32)
 
 //go:wasmimport env reserve
 func host_reserve(betID, amount uint64) uint32
 
 //go:wasmimport env settle
 func host_settle(betID, payout uint64, kind uint32) uint32
-
-//go:wasmimport env get_rng
-func host_get_rng(height uint64, outPtr uint32) uint32
-
-//go:wasmimport env get_bet_count
-func host_get_bet_count() uint32
-
-//go:wasmimport env get_bet_id
-func host_get_bet_id(index uint32) uint64
 
 //go:wasmimport env get_bettor
 func host_get_bettor(betID uint64, outPtr uint32) uint32
@@ -85,8 +65,8 @@ const (
 	maxMines    = 13
 	minMines    = 1
 	houseEdgeBP = 200
-	maxReveals  = 5  // auto-cashout after 5 reveals
-	timeoutBlks = 40 // ~20s at 500ms blocks
+	maxReveals  = 5
+	timeoutBlks = 40
 
 	kindWin    uint32 = 1
 	kindLoss   uint32 = 2
@@ -104,14 +84,12 @@ const (
 //   [16]     mines_count   u8
 //   [17]     revealed      u8
 //   [18]     phase         u8
-//   [19..22] board_mask    u32 (bitmask of opened tiles)
+//   [19..22] board_mask    u32
 //   [23]     pending_tile  u8
-//   [24..31] timeout_height u64
+//   [24..31] timeout_left  u64 (blocks remaining, decremented each block)
 const betSize = 32
 
-// ---------------------------------------------------------------------------
-// KV keys
-// ---------------------------------------------------------------------------
+var keyActiveBets = []byte("ab") // active bet ID list
 
 func betKey(id uint64) []byte {
 	buf := make([]byte, 9)
@@ -180,7 +158,6 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 		return 12
 	}
 
-	// Max payout based on maxReveals (not full board).
 	safe := uint64(boardSize) - uint64(minesCount)
 	reveals := uint64(maxReveals)
 	if reveals > safe {
@@ -194,20 +171,16 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 		return 3
 	}
 
-	// Store bet.
 	bet := make([]byte, betSize)
 	binary.LittleEndian.PutUint64(bet[0:], betID)
 	binary.LittleEndian.PutUint64(bet[8:], stake)
 	bet[16] = minesCount
-	bet[17] = 0           // revealed
+	bet[17] = 0
 	bet[18] = phaseActive
-	// board_mask [19:23] = 0
-	// pending_tile [23] = 0
-	// timeout_height [24:32] = 0 (set on first wakeup)
+	binary.LittleEndian.PutUint64(bet[24:], timeoutBlks) // countdown starts now
 	kvSet(betKey(betID), bet)
 
-	// Schedule timeout wakeup.
-	schedule_wakeup(betID, 0) // next block starts timeout countdown
+	addActiveBet(betID)
 
 	addr := getBettorAddr(betID)
 	emitJSON("joined", "bet_id", betID, "addr", addr, "stake", stake, "mines", uint64(minesCount))
@@ -257,9 +230,6 @@ func handleReveal(betID uint64, payload []byte) uint32 {
 	bet[18] = phaseWaitingRNG
 	bet[23] = tile
 	kvSet(betKey(betID), bet)
-
-	// Reschedule wakeup for RNG resolution (cancels timeout, replaced by RNG wakeup).
-	schedule_wakeup(betID, 0)
 	return 0
 }
 
@@ -283,7 +253,6 @@ func handleCashout(betID uint64) uint32 {
 	payout := mulDiv(stake, edgedMultBP, 10000)
 
 	host_settle(betID, payout, kindWin)
-	cancel_wakeup(betID)
 	addr := getBettorAddr(betID)
 	emitJSON("settled", "bet_id", betID, "addr", addr, "payout", payout, "kind", uint64(kindWin), "reason", "cashout")
 	clearBet(betID)
@@ -295,17 +264,26 @@ func handleCashout(betID uint64) uint32 {
 // ---------------------------------------------------------------------------
 
 //export block_update
-func block_update(height uint64) {
-	count := host_get_bet_count()
-	for i := uint32(0); i < count; i++ {
-		betID := host_get_bet_id(i)
-		processBet(betID, height)
+func block_update(seedPtr, seedLen uint32) {
+	activeBets := loadActiveBets()
+	if len(activeBets) == 0 {
+		return
+	}
+
+	var seed []byte
+	if seedLen > 0 {
+		seed = unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), seedLen)
+	}
+
+	for _, betID := range activeBets {
+		processBet(betID, seed)
 	}
 }
 
-func processBet(betID uint64, height uint64) {
+func processBet(betID uint64, seed []byte) {
 	bet := kvGetBytes(betKey(betID))
 	if bet == nil || len(bet) < betSize {
+		removeActiveBet(betID)
 		return
 	}
 
@@ -313,44 +291,28 @@ func processBet(betID uint64, height uint64) {
 
 	// Handle pending reveal.
 	if phase == phaseWaitingRNG {
-		resolveReveal(betID, bet, height)
+		if seed == nil {
+			return // no RNG — wait
+		}
+		resolveReveal(betID, bet, seed)
 		return
 	}
 
 	// Handle timeout for active bets.
 	if phase == phaseActive {
-		timeoutH := binary.LittleEndian.Uint64(bet[24:32])
-		if timeoutH == 0 {
-			// First wakeup — set timeout deadline.
-			timeoutH = height + timeoutBlks
-			binary.LittleEndian.PutUint64(bet[24:], timeoutH)
-			kvSet(betKey(betID), bet)
-			schedule_wakeup(betID, height+1)
-			emitBetState(betID, bet, height)
-			return
-		}
-
-		if height >= timeoutH {
-			// Timeout reached.
+		timeoutLeft := binary.LittleEndian.Uint64(bet[24:32])
+		if timeoutLeft <= 1 {
 			handleTimeout(betID, bet)
 			return
 		}
-
-		// Still waiting — reschedule and emit state.
-		schedule_wakeup(betID, height+1)
-		emitBetState(betID, bet, height)
-		return
+		timeoutLeft--
+		binary.LittleEndian.PutUint64(bet[24:], timeoutLeft)
+		kvSet(betKey(betID), bet)
+		emitBetState(betID, bet, timeoutLeft)
 	}
 }
 
-func resolveReveal(betID uint64, bet []byte, height uint64) {
-	rngBuf := make([]byte, 32)
-	ok := host_get_rng(height-1, uint32(uintptr(unsafe.Pointer(&rngBuf[0]))))
-	if ok == 0 {
-		schedule_wakeup(betID, height+1)
-		return
-	}
-
+func resolveReveal(betID uint64, bet []byte, seed []byte) {
 	stake := binary.LittleEndian.Uint64(bet[8:16])
 	minesCount := bet[16]
 	revealed := bet[17]
@@ -367,9 +329,9 @@ func resolveReveal(betID uint64, bet []byte, height uint64) {
 	remaining := uint64(boardSize) - uint64(revealed)
 	var betBuf [8]byte
 	binary.BigEndian.PutUint64(betBuf[:], betID)
-	entropy := make([]byte, len(rngBuf)+8)
-	copy(entropy, rngBuf)
-	copy(entropy[len(rngBuf):], betBuf[:])
+	entropy := make([]byte, len(seed)+8)
+	copy(entropy, seed)
+	copy(entropy[len(seed):], betBuf[:])
 	h := sha256sum(entropy)
 	rngVal := binary.BigEndian.Uint64(h[0:8]) % remaining
 	isMine := rngVal < uint64(minesCount)
@@ -396,8 +358,7 @@ func resolveReveal(betID uint64, bet []byte, height uint64) {
 	payout := mulDiv(stake, edgedMultBP, 10000)
 
 	// Reset timeout.
-	timeoutH := height + timeoutBlks
-	binary.LittleEndian.PutUint64(bet[24:], timeoutH)
+	binary.LittleEndian.PutUint64(bet[24:], timeoutBlks)
 	kvSet(betKey(betID), bet)
 
 	emitJSON("reveal", "bet_id", betID, "addr", addr, "tile", uint64(tile), "safe", uint64(1), "revealed", uint64(revealed), "mult_bp", edgedMultBP, "payout", payout)
@@ -409,9 +370,6 @@ func resolveReveal(betID uint64, bet []byte, height uint64) {
 		clearBet(betID)
 		return
 	}
-
-	// Continue — schedule timeout wakeup.
-	schedule_wakeup(betID, height+1)
 }
 
 func handleTimeout(betID uint64, bet []byte) {
@@ -419,7 +377,6 @@ func handleTimeout(betID uint64, bet []byte) {
 	addr := getBettorAddr(betID)
 
 	if revealed == 0 {
-		// No tiles opened — refund.
 		stake := binary.LittleEndian.Uint64(bet[8:16])
 		host_settle(betID, stake, kindRefund)
 		emitJSON("settled", "bet_id", betID, "addr", addr, "payout", stake, "kind", uint64(kindRefund), "reason", "timeout_refund")
@@ -427,7 +384,6 @@ func handleTimeout(betID uint64, bet []byte) {
 		return
 	}
 
-	// Tiles opened — auto-cashout at current multiplier.
 	minesCount := bet[16]
 	stake := binary.LittleEndian.Uint64(bet[8:16])
 	currentMultBP := getFairMultBP(uint64(minesCount-1), uint64(revealed-1))
@@ -439,15 +395,9 @@ func handleTimeout(betID uint64, bet []byte) {
 	clearBet(betID)
 }
 
-// emitBetState emits a state event for an active bet.
-func emitBetState(betID uint64, bet []byte, height uint64) {
+func emitBetState(betID uint64, bet []byte, timeoutLeft uint64) {
 	revealed := bet[17]
 	minesCount := bet[16]
-	timeoutH := binary.LittleEndian.Uint64(bet[24:32])
-	timeoutLeft := uint64(0)
-	if timeoutH > height {
-		timeoutLeft = timeoutH - height
-	}
 
 	multBP := uint64(10000)
 	payout := uint64(0)
@@ -470,12 +420,65 @@ func emitBetState(betID uint64, bet []byte, height uint64) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Active bet list helpers
 // ---------------------------------------------------------------------------
+
+func addActiveBet(betID uint64) {
+	list := kvGetBytes(keyActiveBets)
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, betID)
+	if list == nil {
+		kvSet(keyActiveBets, buf)
+	} else {
+		newList := make([]byte, len(list)+8)
+		copy(newList, list)
+		copy(newList[len(list):], buf)
+		kvSet(keyActiveBets, newList)
+	}
+}
+
+func loadActiveBets() []uint64 {
+	list := kvGetBytes(keyActiveBets)
+	if list == nil {
+		return nil
+	}
+	n := len(list) / 8
+	ids := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		ids[i] = binary.LittleEndian.Uint64(list[i*8:])
+	}
+	return ids
+}
+
+func removeActiveBet(betID uint64) {
+	list := kvGetBytes(keyActiveBets)
+	if list == nil {
+		return
+	}
+	newList := make([]byte, 0, len(list))
+	for i := 0; i+8 <= len(list); i += 8 {
+		id := binary.LittleEndian.Uint64(list[i:])
+		if id != betID {
+			buf := make([]byte, 8)
+			binary.LittleEndian.PutUint64(buf, id)
+			newList = append(newList, buf...)
+		}
+	}
+	if len(newList) == 0 {
+		kvDelete(keyActiveBets)
+	} else {
+		kvSet(keyActiveBets, newList)
+	}
+}
 
 func clearBet(betID uint64) {
 	kvDelete(betKey(betID))
+	removeActiveBet(betID)
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 func getBettorAddr(betID uint64) string {
 	buf := make([]byte, maxAddrBuf)
@@ -494,13 +497,11 @@ func ptrToSlice(ptr, length uint32) []byte {
 }
 
 // ---------------------------------------------------------------------------
-// query — returns active bet state (if any)
+// query
 // ---------------------------------------------------------------------------
 
 //export query
 func query() *byte {
-	// No persistent game state to query for mines — each bet is independent.
-	// Return empty JSON object.
 	data := []byte(`{}`)
 	result := make([]byte, 4+len(data))
 	binary.LittleEndian.PutUint32(result[0:4], uint32(len(data)))
@@ -519,15 +520,13 @@ func info() *byte {
 		"engine":"mines",
 		"mode":"v3",
 		"house_edge_bp":200,
-		"max_reveals":5,
-		"timeout_blocks":40,
 		"developer":"ExoHash",
-		"description":"5x5 minefield — reveal tiles, avoid mines, cash out. Max 5 reveals, 20s timeout.",
+		"description":"5x5 minefield — reveal tiles, avoid mines, cashout anytime",
 		"errors":{
 			"place_bet":{
-				"3":"Insufficient bankroll liquidity",
 				"11":"Invalid parameters — expected sender(20) + mines_count(1)",
-				"12":"Mines count out of range — must be between 1 and 13"
+				"12":"Mines count out of range — must be between 1 and 13",
+				"3":"Insufficient bankroll liquidity"
 			},
 			"bet_action":{
 				"1":"Invalid action format",
@@ -566,11 +565,7 @@ func kvGetBytes(key []byte) []byte {
 	if length == 0 {
 		return nil
 	}
-	val := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), length)
-	if length == 1 && val[0] == 0xFF {
-		return nil
-	}
-	return val
+	return unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), length)
 }
 
 func kvSet(key, value []byte) {
@@ -583,13 +578,11 @@ func kvSet(key, value []byte) {
 	)
 }
 
-var kvDeleteSentinel = []byte{0xFF}
-
 func kvDelete(key []byte) {
-	kv_set(
-		uint32(uintptr(unsafe.Pointer(&key[0]))), uint32(len(key)),
-		uint32(uintptr(unsafe.Pointer(&kvDeleteSentinel[0]))), 1,
-	)
+	if len(key) == 0 {
+		return
+	}
+	host_kv_delete(uint32(uintptr(unsafe.Pointer(&key[0]))), uint32(len(key)))
 }
 
 // ---------------------------------------------------------------------------
@@ -597,34 +590,37 @@ func kvDelete(key []byte) {
 // ---------------------------------------------------------------------------
 
 func mulDiv(a, b, c uint64) uint64 {
+	if c == 0 {
+		return 0
+	}
 	hi, lo := mul64(a, b)
+	if hi == 0 {
+		return lo / c
+	}
 	return div128(hi, lo, c)
 }
 
 func mul64(a, b uint64) (uint64, uint64) {
-	aHi, aLo := a>>32, a&0xFFFFFFFF
-	bHi, bLo := b>>32, b&0xFFFFFFFF
-	mid1, mid2 := aHi*bLo, aLo*bHi
-	lo := aLo * bLo
-	hi := aHi * bHi
-	carry := ((lo >> 32) + (mid1 & 0xFFFFFFFF) + (mid2 & 0xFFFFFFFF)) >> 32
-	lo += (mid1 << 32) + (mid2 << 32)
-	hi += (mid1 >> 32) + (mid2 >> 32) + carry
-	return hi, lo
+	aH, aL := a>>32, a&0xFFFFFFFF
+	bH, bL := b>>32, b&0xFFFFFFFF
+	lo := aL * bL
+	mid := aH*bL + aL*bH
+	hi := aH * bH
+	lo2 := lo + (mid << 32)
+	if lo2 < lo {
+		hi++
+	}
+	hi += mid >> 32
+	return hi, lo2
 }
 
 func div128(hi, lo, d uint64) uint64 {
-	if hi == 0 {
-		return lo / d
+	if d == 0 {
+		return 0
 	}
-	if hi < d {
-		top := (hi << 32) | (lo >> 32)
-		q1 := top / d
-		rem := top % d
-		bot := (rem << 32) | (lo & 0xFFFFFFFF)
-		return (q1 << 32) | (bot / d)
-	}
-	return lo / d
+	q := hi / d
+	r := hi % d
+	return (q << 32) + (((r << 32) | (lo >> 32)) / d)
 }
 
 // ---------------------------------------------------------------------------
@@ -680,7 +676,7 @@ func appendUint(buf []byte, v uint64) []byte {
 }
 
 // ---------------------------------------------------------------------------
-// SHA-256 (inline)
+// SHA-256 (inline — no crypto/sha256, FIPS panics in WASM)
 // ---------------------------------------------------------------------------
 
 var sha256K = [64]uint32{

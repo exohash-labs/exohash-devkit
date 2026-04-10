@@ -1,14 +1,11 @@
-// Dice calculator v3 — host-callback protocol.
+// Dice calculator — WASM protocol v2.
 //
-// Instead of receiving binary messages and returning commands,
-// this calculator calls host functions directly:
-//   schedule_wakeup, reserve, settle, get_rng, emit_event, etc.
+// Exports: alloc, dealloc, place_bet, bet_action, block_update, info
+// Imports: env.kv_get, env.kv_set, env.kv_delete,
+//          env.reserve, env.settle, env.emit_event
 //
-// Exports: alloc, dealloc, place_bet, block_update, info
-// Imports: env.kv_get, env.kv_set, env.kv_has,
-//          env.schedule_wakeup, env.reserve, env.settle,
-//          env.get_rng, env.get_bet_count, env.get_bet_id, env.get_bet,
-//          env.emit_event
+// block_update receives DKG seed directly (no get_rng).
+// Game manages its own pending bet list in KV (no wakeups).
 package main
 
 import (
@@ -26,29 +23,14 @@ func kv_get(keyPtr, keyLen uint32) uint64
 //go:wasmimport env kv_set
 func kv_set(keyPtr, keyLen, valPtr, valLen uint32)
 
-//go:wasmimport env kv_has
-func kv_has(keyPtr, keyLen uint32) uint32
-
-//go:wasmimport env schedule_wakeup
-func schedule_wakeup(betID, height uint64)
+//go:wasmimport env kv_delete
+func kv_delete(keyPtr, keyLen uint32)
 
 //go:wasmimport env reserve
 func host_reserve(betID, amount uint64) uint32
 
 //go:wasmimport env settle
 func host_settle(betID, payout uint64, kind uint32) uint32
-
-//go:wasmimport env get_rng
-func host_get_rng(height uint64, outPtr uint32) uint32
-
-//go:wasmimport env get_bet_count
-func host_get_bet_count() uint32
-
-//go:wasmimport env get_bet_id
-func host_get_bet_id(index uint32) uint64
-
-//go:wasmimport env get_bet
-func host_get_bet(betID uint64, outPtr uint32) uint32
 
 //go:wasmimport env emit_event
 func host_emit_event(topicPtr, topicLen, dataPtr, dataLen uint32)
@@ -79,74 +61,78 @@ const (
 	kindLoss = 2
 )
 
+// KV keys
+var (
+	keyPendingList = []byte("pl") // pending bet ID list: [betID1 u64][betID2 u64]...
+)
+
 // ---------------------------------------------------------------------------
 // place_bet — called during MsgPlaceBet tx
 // ---------------------------------------------------------------------------
 
 //export place_bet
 func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsLen uint32) uint32 {
-	// Params layout: sender(20) + mode(1) + threshold(8) = 29 bytes.
 	params := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(paramsPtr))), paramsLen)
 	if len(params) < 29 {
-		return 1 // invalid params
+		return 1
 	}
-	// sender := params[0:20] — not used by dice
 	betMode := params[20]
 	threshold := binary.LittleEndian.Uint64(params[21:29])
 
 	chance := chanceBP(betMode, threshold)
 	if chance < minChanceBP || chance > maxChanceBP || chance == 0 {
-		return 2 // chance out of range
+		return 2
 	}
 
 	maxPayout := stake * fairMultBP(chance) / 10000
-
-	// Reserve bankroll liquidity.
 	if host_reserve(betID, maxPayout) != 0 {
-		return 3 // insufficient liquidity
+		return 3
 	}
 
-	// Store bet state in KV for block_update to use.
-	// 33 bytes: betID(8) + stake(8) + mode(1) + threshold(8) + rngHeight(8)
-	state := make([]byte, 33)
+	// Store bet state in KV.
+	state := make([]byte, 25)
 	binary.LittleEndian.PutUint64(state[0:], betID)
 	binary.LittleEndian.PutUint64(state[8:], stake)
 	state[16] = betMode
 	binary.LittleEndian.PutUint64(state[17:], threshold)
-	// RNG height = current block height (keeper provides RNG for this height at next block)
-	// We don't have height directly, but schedule_wakeup(betID, 0) means "next block".
-	// Store a sentinel — block_update will use height-1 for RNG.
-	binary.LittleEndian.PutUint64(state[25:], 0) // filled by block_update
 	kvSet(betKey(betID), state)
 
-	// Get current block height from a simple trick: we know height from context.
-	// Actually, we need height for schedule_wakeup. The keeper passes it implicitly.
-	// For v3, use the betID's KV to find height. Simpler: the keeper already knows
-	// the height — WASM just says "wake me up at next block".
-	// Use height=0 as sentinel for "current height + 1".
-	schedule_wakeup(betID, 0) // 0 = keeper interprets as currentHeight+1
+	// Add to pending list.
+	addPending(betID)
 
-	// Emit bet event.
 	emitJSON("bet", "entry_id", betID, "stake", stake, "chance_bp", chance, "max_payout", maxPayout)
-
-	return 0 // success
+	return 0
 }
 
 // ---------------------------------------------------------------------------
-// block_update — called once per block in BeginBlock
+// block_update — called every block with DKG seed
 // ---------------------------------------------------------------------------
 
 //export block_update
-func block_update(height uint64) {
-	count := host_get_bet_count()
-	for i := uint32(0); i < count; i++ {
-		betID := host_get_bet_id(i)
-		settleBet(betID, height)
+func block_update(seedPtr, seedLen uint32) {
+	// Read pending bet list.
+	pending := kvGetBytes(keyPendingList)
+	if len(pending) == 0 {
+		return // no pending bets
 	}
+
+	// Need seed to settle.
+	if seedLen == 0 {
+		return // no RNG — wait for next block
+	}
+	seed := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), seedLen)
+
+	// Settle all pending bets.
+	for i := 0; i+8 <= len(pending); i += 8 {
+		betID := binary.LittleEndian.Uint64(pending[i : i+8])
+		settleBet(betID, seed)
+	}
+
+	// Clear pending list.
+	kvDelete(keyPendingList)
 }
 
-func settleBet(betID, height uint64) {
-	// Load bet state from KV.
+func settleBet(betID uint64, seed []byte) {
 	state := kvGetBytes(betKey(betID))
 	if state == nil || len(state) < 25 {
 		return
@@ -157,21 +143,10 @@ func settleBet(betID, height uint64) {
 	betMode := state[16]
 	threshold := binary.LittleEndian.Uint64(state[17:25])
 
-	// RNG height = block before this one (bet placed at height-1, RNG available now).
-	rngHeight := height - 1
-	rngBuf := make([]byte, 32)
-	ok := host_get_rng(rngHeight, uint32(uintptr(unsafe.Pointer(&rngBuf[0]))))
-	if ok == 0 {
-		// RNG not available — reschedule.
-		schedule_wakeup(betID, height+1)
-		return
-	}
-
-	// Derive roll.
 	chance := chanceBP(betMode, threshold)
 	mult := fairMultBP(chance)
 	effChance := chance * (10000 - houseEdgeBP) / 10000
-	roll := deriveRoll(rngBuf, storedBetID)
+	roll := deriveRoll(seed, storedBetID)
 	win := isWin(betMode, roll, effChance)
 
 	payout := uint64(0)
@@ -181,10 +156,11 @@ func settleBet(betID, height uint64) {
 		settleKind = uint32(kindWin)
 	}
 
-	// Settle via host.
 	host_settle(betID, payout, settleKind)
 
-	// Emit settle event.
+	// Clean up bet state.
+	kvDelete(betKey(betID))
+
 	resultStr := "loss"
 	if win {
 		resultStr = "win"
@@ -199,7 +175,7 @@ func settleBet(betID, height uint64) {
 //export info
 func info() *byte {
 	data := []byte(`{
-		"name":"Dice v3",
+		"name":"Dice",
 		"engine":"dice",
 		"mode":"v3",
 		"house_edge_bp":200,
@@ -217,6 +193,18 @@ func info() *byte {
 	binary.LittleEndian.PutUint32(result[0:4], uint32(len(data)))
 	copy(result[4:], data)
 	return &result[0]
+}
+
+// ---------------------------------------------------------------------------
+// Pending bet list helpers
+// ---------------------------------------------------------------------------
+
+func addPending(betID uint64) {
+	existing := kvGetBytes(keyPendingList)
+	entry := make([]byte, 8)
+	binary.LittleEndian.PutUint64(entry, betID)
+	newList := append(existing, entry...)
+	kvSet(keyPendingList, newList)
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +233,10 @@ func kvGetBytes(key []byte) []byte {
 	ptr := uint32(packed >> 32)
 	length := uint32(packed & 0xFFFFFFFF)
 	return unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), length)
+}
+
+func kvDelete(key []byte) {
+	kv_delete(uint32(uintptr(unsafe.Pointer(&key[0]))), uint32(len(key)))
 }
 
 // ---------------------------------------------------------------------------
@@ -378,40 +370,51 @@ func sha256sum(data []byte) [32]byte {
 	h7 := uint32(0x5be0cd19)
 
 	msgLen := len(data)
-	bitLen := uint64(msgLen) * 8
 	data = append(data, 0x80)
-	for len(data)%64 != 56 {
+	for (len(data) % 64) != 56 {
 		data = append(data, 0)
 	}
+	bits := uint64(msgLen) * 8
 	var lenBuf [8]byte
-	binary.BigEndian.PutUint64(lenBuf[:], bitLen)
+	binary.BigEndian.PutUint64(lenBuf[:], bits)
 	data = append(data, lenBuf[:]...)
 
-	var w [64]uint32
-	for off := 0; off < len(data); off += 64 {
-		block := data[off : off+64]
+	for offset := 0; offset < len(data); offset += 64 {
+		chunk := data[offset : offset+64]
+		var w [64]uint32
 		for i := 0; i < 16; i++ {
-			w[i] = binary.BigEndian.Uint32(block[i*4:])
+			w[i] = binary.BigEndian.Uint32(chunk[i*4:])
 		}
 		for i := 16; i < 64; i++ {
-			s0 := rotr32(w[i-15], 7) ^ rotr32(w[i-15], 18) ^ (w[i-15] >> 3)
-			s1 := rotr32(w[i-2], 17) ^ rotr32(w[i-2], 19) ^ (w[i-2] >> 10)
+			s0 := rightRotate(w[i-15], 7) ^ rightRotate(w[i-15], 18) ^ (w[i-15] >> 3)
+			s1 := rightRotate(w[i-2], 17) ^ rightRotate(w[i-2], 19) ^ (w[i-2] >> 10)
 			w[i] = w[i-16] + s0 + w[i-7] + s1
 		}
-
 		a, b, c, d, e, f, g, h := h0, h1, h2, h3, h4, h5, h6, h7
 		for i := 0; i < 64; i++ {
-			S1 := rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)
+			S1 := rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)
 			ch := (e & f) ^ (^e & g)
 			temp1 := h + S1 + ch + sha256K[i] + w[i]
-			S0 := rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)
+			S0 := rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)
 			maj := (a & b) ^ (a & c) ^ (b & c)
 			temp2 := S0 + maj
-			h = g; g = f; f = e; e = d + temp1
-			d = c; c = b; b = a; a = temp1 + temp2
+			h = g
+			g = f
+			f = e
+			e = d + temp1
+			d = c
+			c = b
+			b = a
+			a = temp1 + temp2
 		}
-		h0 += a; h1 += b; h2 += c; h3 += d
-		h4 += e; h5 += f; h6 += g; h7 += h
+		h0 += a
+		h1 += b
+		h2 += c
+		h3 += d
+		h4 += e
+		h5 += f
+		h6 += g
+		h7 += h
 	}
 
 	var out [32]byte
@@ -426,7 +429,7 @@ func sha256sum(data []byte) [32]byte {
 	return out
 }
 
-func rotr32(x uint32, n uint) uint32 {
+func rightRotate(x uint32, n uint) uint32 {
 	return (x >> n) | (x << (32 - n))
 }
 

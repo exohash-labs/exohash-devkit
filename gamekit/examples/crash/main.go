@@ -1,18 +1,15 @@
-// Crash calculator v3 — host-callback protocol.
+// Crash calculator — WASM protocol v2.
 //
 // Multiplayer crash game with rising multiplier and random crash point.
 //
 // Phases: open → tick → crashed → open → ...
 //
-// Events (game UI uses only these, chain events for accounting):
-//   state   — every block: {phase, round, mult_bp, tick, blocks_left, players, active, cashed, stake}
-//   joined  — on place_bet: {bet_id, addr, stake, players}
-//   cashout — on voluntary exit: {bet_id, addr, mult_bp, payout}
-//   settled — on crash/loss per player: {bet_id, addr, payout, kind}
-//
-// query() — called on page load: {round, phase, mult_bp, tick, blocks_left, players:[...], history:[...]}
+// block_update receives DKG seed directly (no get_rng, no wakeups).
+// Game is called every block and manages its own state via KV.
 //
 // Exports: alloc, dealloc, place_bet, bet_action, block_update, query, info, init_game
+// Imports: env.kv_get, env.kv_set, env.kv_delete,
+//          env.reserve, env.settle, env.get_bettor, env.emit_event
 package main
 
 import (
@@ -31,23 +28,14 @@ func kv_get(keyPtr, keyLen uint32) uint64
 //go:wasmimport env kv_set
 func kv_set(keyPtr, keyLen, valPtr, valLen uint32)
 
-//go:wasmimport env schedule_wakeup
-func schedule_wakeup(betID, height uint64)
+//go:wasmimport env kv_delete
+func host_kv_delete(keyPtr, keyLen uint32)
 
 //go:wasmimport env reserve
 func host_reserve(betID, amount uint64) uint32
 
 //go:wasmimport env settle
 func host_settle(betID, payout uint64, kind uint32) uint32
-
-//go:wasmimport env get_rng
-func host_get_rng(height uint64, outPtr uint32) uint32
-
-//go:wasmimport env get_bet_count
-func host_get_bet_count() uint32
-
-//go:wasmimport env get_bet_id
-func host_get_bet_id(index uint32) uint64
 
 //go:wasmimport env get_bettor
 func host_get_bettor(betID uint64, outPtr uint32) uint32
@@ -87,12 +75,12 @@ const (
 	statusCashoutReq byte = 1
 	statusSettled    byte = 2
 
-	cfgSize   = 48 // 40 + crashedBlocks(8)
+	cfgSize   = 48
 	roundSize = 33
-	betSize   = 18 // bet_id(8)+stake(8)+status(1)+pad(1)
+	betSize   = 18
 
 	maxHistory     = 20
-	crashedBlocks  = 5 // how many blocks to linger in crashed phase
+	crashedBlocks  = 5
 	maxAddrBufSize = 64
 )
 
@@ -107,7 +95,7 @@ const (
 // Round layout (33 bytes):
 //   [0..7]   current_mult (bp)
 //   [8..15]  ticks_elapsed
-//   [16..23] pending_height
+//   [16..23] blocks_in_phase (countdown for open/crashed, tick count for tick)
 //   [24]     phase
 //   [25..32] bet_count
 
@@ -115,8 +103,8 @@ var (
 	keyCfg     = []byte("cfg")
 	keyRound   = []byte("r")
 	keyBetList = []byte("bl")
-	keyTrigger = []byte("tg")
 	keyHistory = []byte("ch")
+	keyCashout = []byte("co") // pending cashout bet IDs
 )
 
 func betKey(id uint64) []byte {
@@ -126,31 +114,18 @@ func betKey(id uint64) []byte {
 	return buf
 }
 
-func cashoutKey(height uint64) []byte {
-	buf := make([]byte, 9)
-	buf[0] = 'c'
-	binary.LittleEndian.PutUint64(buf[1:], height)
-	return buf
-}
-
 // ---------------------------------------------------------------------------
 // init_game
 // ---------------------------------------------------------------------------
 
 //export init_game
 func init_game(sentinelID, bankrollID, calculatorID uint64) {
-	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buf, sentinelID)
-	kvSet(keyTrigger, buf)
-
 	round := newRound()
 	kvSet(keyRound, round)
 
 	rnBuf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(rnBuf, 1)
 	kvSet([]byte("rn"), rnBuf)
-
-	schedule_wakeup(sentinelID, 0)
 
 	cfg := kvGetOrInitCfg()
 	joinWindow := binary.LittleEndian.Uint64(cfg[32:40])
@@ -177,7 +152,6 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 		return 11
 	}
 
-	// Store bet.
 	bet := make([]byte, betSize)
 	binary.LittleEndian.PutUint64(bet[0:], betID)
 	binary.LittleEndian.PutUint64(bet[8:], stake)
@@ -185,13 +159,11 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 	kvSet(betKey(betID), bet)
 	appendBetID(betID)
 
-	// Update count.
 	count := binary.LittleEndian.Uint64(round[25:33])
 	count++
 	binary.LittleEndian.PutUint64(round[25:], count)
 	kvSet(keyRound, round)
 
-	// Reserve max payout.
 	maxMult := binary.LittleEndian.Uint64(cfg[16:24])
 	maxPayout := safeMulDiv(stake, maxMult, 10000)
 	if host_reserve(betID, maxPayout) != 0 {
@@ -219,32 +191,31 @@ func bet_action(betID uint64, actionPtr, actionLen uint32) uint32 {
 	}
 	bet[16] = statusCashoutReq
 	kvSet(betKey(betID), bet)
-	pendingH := binary.LittleEndian.Uint64(round[16:24])
-	appendCashout(pendingH, betID)
+	appendCashout(betID)
 	return 0
 }
 
 // ---------------------------------------------------------------------------
-// block_update
+// block_update — called every block with DKG seed
 // ---------------------------------------------------------------------------
 
 //export block_update
-func block_update(height uint64) {
-	count := host_get_bet_count()
-	if count == 0 {
-		return
-	}
+func block_update(seedPtr, seedLen uint32) {
 	round := kvGetRound()
 	if round == nil {
 		return
 	}
 	switch round[24] {
 	case phaseOpen:
-		handleOpen(height, round)
+		handleOpen(round)
 	case phaseTick:
-		handleTick(height, round)
+		if seedLen == 0 {
+			return // no RNG — skip tick
+		}
+		seed := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), seedLen)
+		handleTick(round, seed)
 	case phaseCrashed:
-		handleCrashed(height, round)
+		handleCrashed(round)
 	}
 }
 
@@ -252,39 +223,31 @@ func block_update(height uint64) {
 // Phase: OPEN — join window countdown
 // ---------------------------------------------------------------------------
 
-func handleOpen(height uint64, round []byte) {
+func handleOpen(round []byte) {
 	cfg := kvGetOrInitCfg()
 	joinWindow := binary.LittleEndian.Uint64(cfg[32:40])
 
-	waitKey := []byte("wt")
-	waitBuf := kvGetBytes(waitKey)
-	var remaining uint64
-	if waitBuf == nil {
-		remaining = joinWindow
-	} else {
-		remaining = binary.LittleEndian.Uint64(waitBuf)
+	blocksIn := binary.LittleEndian.Uint64(round[16:24])
+	if blocksIn == 0 {
+		blocksIn = joinWindow // first call in open phase
 	}
 
 	count := binary.LittleEndian.Uint64(round[25:33])
 	_, _, totalStake := countActive()
 	rn := getRoundNumber()
 
-	if remaining > 1 {
-		remaining--
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, remaining)
-		kvSet(waitKey, buf)
-		reschedule(height + 1)
-		emitState("open", rn, 10000, 0, remaining, count, count, 0, totalStake)
+	if blocksIn > 1 {
+		blocksIn--
+		binary.LittleEndian.PutUint64(round[16:], blocksIn)
+		kvSet(keyRound, round)
+		emitState("open", rn, 10000, 0, blocksIn, count, count, 0, totalStake)
 		return
 	}
 
 	// Transition to tick phase.
-	kvDelete(waitKey)
 	round[24] = phaseTick
-	binary.LittleEndian.PutUint64(round[16:], height)
+	binary.LittleEndian.PutUint64(round[16:], 0) // reset counter
 	kvSet(keyRound, round)
-	reschedule(height + 1)
 	emitState("tick", rn, 10000, 0, 0, count, count, 0, totalStake)
 }
 
@@ -292,24 +255,15 @@ func handleOpen(height uint64, round []byte) {
 // Phase: TICK — multiplier climbing
 // ---------------------------------------------------------------------------
 
-func handleTick(height uint64, round []byte) {
+func handleTick(round []byte, seed []byte) {
 	cfg := kvGetOrInitCfg()
 
-	pendingHeight := binary.LittleEndian.Uint64(round[16:24])
 	currentMult := binary.LittleEndian.Uint64(round[0:8])
 	ticksElapsed := binary.LittleEndian.Uint64(round[8:16])
 	houseEdge := binary.LittleEndian.Uint64(cfg[0:8])
 	tickGrowth := binary.LittleEndian.Uint64(cfg[8:16])
 	maxMult := binary.LittleEndian.Uint64(cfg[16:24])
 	maxTicks := binary.LittleEndian.Uint64(cfg[24:32])
-
-	// Get RNG.
-	rngBuf := make([]byte, 32)
-	ok := host_get_rng(pendingHeight, uint32(uintptr(unsafe.Pointer(&rngBuf[0]))))
-	if ok == 0 {
-		reschedule(height + 1)
-		return
-	}
 
 	// Next multiplier.
 	nextMult := currentMult * (10000 + tickGrowth) / 10000
@@ -332,17 +286,17 @@ func handleTick(height uint64, round []byte) {
 		probSurvive = 1.0
 	}
 
-	rngVal := getUniformProb(rngBuf, pendingHeight)
+	rngVal := getUniformProb(seed, ticksElapsed)
 	crashed := rngVal >= probSurvive
 	rn := getRoundNumber()
 
-	// Load cashouts.
-	cashoutIDs := loadAndDeleteCashoutIDs(pendingHeight)
+	// Load and clear cashouts.
+	cashoutIDs := loadAndDeleteCashouts()
 
 	if crashed {
 		pushHistory(currentMult)
 		settleAllAsLoss(round)
-		enterCrashed(round, height, rn, currentMult, ticksElapsed)
+		enterCrashed(round, rn, currentMult, ticksElapsed)
 		return
 	}
 
@@ -365,7 +319,7 @@ func handleTick(height uint64, round []byte) {
 	if maxTicks > 0 && ticksElapsed+1 >= maxTicks {
 		pushHistory(nextMult)
 		settleRemainingAsWin(round, nextMult)
-		enterCrashed(round, height, rn, nextMult, ticksElapsed+1)
+		enterCrashed(round, rn, nextMult, ticksElapsed+1)
 		return
 	}
 
@@ -373,36 +327,32 @@ func handleTick(height uint64, round []byte) {
 	if nextMult >= maxMult {
 		pushHistory(maxMult)
 		settleRemainingAsWin(round, maxMult)
-		enterCrashed(round, height, rn, maxMult, ticksElapsed)
+		enterCrashed(round, rn, maxMult, ticksElapsed)
 		return
 	}
 
 	// Advance.
 	binary.LittleEndian.PutUint64(round[0:], nextMult)
 	binary.LittleEndian.PutUint64(round[8:], ticksElapsed+1)
-	binary.LittleEndian.PutUint64(round[16:], height)
 	kvSet(keyRound, round)
 
 	active, cashed, totalStake := countActive()
 	count := binary.LittleEndian.Uint64(round[25:33])
 	emitState("tick", rn, nextMult, ticksElapsed+1, 0, count, active, cashed, totalStake)
-	reschedule(height + 1)
 }
 
 // ---------------------------------------------------------------------------
 // Phase: CRASHED — cooldown before next round
 // ---------------------------------------------------------------------------
 
-func enterCrashed(round []byte, height uint64, rn, crashMult, finalTick uint64) {
+func enterCrashed(round []byte, rn, crashMult, finalTick uint64) {
 	round[24] = phaseCrashed
-	// Store crash info: reuse pending_height field for cooldown counter.
 	cfg := kvGetOrInitCfg()
 	cooldown := binary.LittleEndian.Uint64(cfg[40:48])
 	if cooldown == 0 {
 		cooldown = crashedBlocks
 	}
-	binary.LittleEndian.PutUint64(round[16:], cooldown) // reuse as blocks_left
-	// Keep mult and tick for display.
+	binary.LittleEndian.PutUint64(round[16:], cooldown)
 	binary.LittleEndian.PutUint64(round[0:], crashMult)
 	binary.LittleEndian.PutUint64(round[8:], finalTick)
 	kvSet(keyRound, round)
@@ -410,10 +360,9 @@ func enterCrashed(round []byte, height uint64, rn, crashMult, finalTick uint64) 
 	count := binary.LittleEndian.Uint64(round[25:33])
 	_, cashed, totalStake := countActive()
 	emitState("crashed", rn, crashMult, finalTick, cooldown, count, 0, cashed, totalStake)
-	reschedule(height + 1)
 }
 
-func handleCrashed(height uint64, round []byte) {
+func handleCrashed(round []byte) {
 	remaining := binary.LittleEndian.Uint64(round[16:24])
 	rn := getRoundNumber()
 	crashMult := binary.LittleEndian.Uint64(round[0:8])
@@ -425,27 +374,24 @@ func handleCrashed(height uint64, round []byte) {
 		binary.LittleEndian.PutUint64(round[16:], remaining)
 		kvSet(keyRound, round)
 		emitState("crashed", rn, crashMult, finalTick, remaining, count, 0, 0, 0)
-		reschedule(height + 1)
 		return
 	}
 
 	// Cooldown over — restart.
-	markSettledAndRestart(height)
+	markSettledAndRestart()
 }
 
-func markSettledAndRestart(height uint64) {
+func markSettledAndRestart() {
 	betIDs := loadBetIDs()
 	for _, bid := range betIDs {
 		kvDelete(betKey(bid))
 	}
 	kvDelete(keyBetList)
-	kvDelete([]byte("wt"))
+	kvDelete(keyCashout)
 
 	newR := newRound()
 	kvSet(keyRound, newR)
-	reschedule(height + 1)
 
-	// Increment round number.
 	rn := getRoundNumber() + 1
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, rn)
@@ -503,14 +449,6 @@ func newRound() []byte {
 	return round
 }
 
-func reschedule(height uint64) {
-	trigBuf := kvGetBytes(keyTrigger)
-	if trigBuf != nil {
-		trigID := binary.LittleEndian.Uint64(trigBuf)
-		schedule_wakeup(trigID, height)
-	}
-}
-
 func getRoundNumber() uint64 {
 	rnBuf := kvGetBytes([]byte("rn"))
 	if rnBuf != nil && len(rnBuf) >= 8 {
@@ -565,7 +503,6 @@ func pushHistory(crashMult uint64) {
 	kvSet(keyHistory, combined)
 }
 
-// emitState emits the flat 9-field state event.
 func emitState(phase string, round, multBP, tick, blocksLeft, players, active, cashed, stake uint64) {
 	emitJSON("state",
 		"phase", phase,
@@ -611,28 +548,26 @@ func loadBetIDs() []uint64 {
 	return ids
 }
 
-func appendCashout(height, betID uint64) {
-	key := cashoutKey(height)
-	list := kvGetBytes(key)
+func appendCashout(betID uint64) {
+	list := kvGetBytes(keyCashout)
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, betID)
 	if list == nil {
-		kvSet(key, buf)
+		kvSet(keyCashout, buf)
 	} else {
 		newList := make([]byte, len(list)+8)
 		copy(newList, list)
 		copy(newList[len(list):], buf)
-		kvSet(key, newList)
+		kvSet(keyCashout, newList)
 	}
 }
 
-func loadAndDeleteCashoutIDs(height uint64) []uint64 {
-	key := cashoutKey(height)
-	list := kvGetBytes(key)
+func loadAndDeleteCashouts() []uint64 {
+	list := kvGetBytes(keyCashout)
 	if list == nil {
 		return nil
 	}
-	kvDelete(key)
+	kvDelete(keyCashout)
 	n := len(list) / 8
 	ids := make([]uint64, n)
 	for i := 0; i < n; i++ {
@@ -658,11 +593,7 @@ func kvGetBytes(key []byte) []byte {
 	if length == 0 {
 		return nil
 	}
-	val := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), length)
-	if length == 1 && val[0] == 0xFF {
-		return nil
-	}
-	return val
+	return unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), length)
 }
 
 func kvSet(key, value []byte) {
@@ -675,13 +606,11 @@ func kvSet(key, value []byte) {
 	)
 }
 
-var kvDeleteSentinel = []byte{0xFF}
-
 func kvDelete(key []byte) {
-	kv_set(
-		uint32(uintptr(unsafe.Pointer(&key[0]))), uint32(len(key)),
-		uint32(uintptr(unsafe.Pointer(&kvDeleteSentinel[0]))), 1,
-	)
+	if len(key) == 0 {
+		return
+	}
+	host_kv_delete(uint32(uintptr(unsafe.Pointer(&key[0]))), uint32(len(key)))
 }
 
 func kvGetRound() []byte {
@@ -744,9 +673,9 @@ func safeMulDiv(a, b, c uint64) uint64 {
 	return q<<64 + (r<<64+low)/c
 }
 
-func getUniformProb(seed []byte, tickH uint64) float64 {
+func getUniformProb(seed []byte, tickNum uint64) float64 {
 	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], tickH)
+	binary.LittleEndian.PutUint64(buf[:], tickNum)
 	data := make([]byte, len(seed)+8)
 	copy(data, seed)
 	copy(data[len(seed):], buf[:])
@@ -839,17 +768,11 @@ func query() *byte {
 	if round != nil {
 		multBP = binary.LittleEndian.Uint64(round[0:8])
 		tick = binary.LittleEndian.Uint64(round[8:16])
-		if phase == "open" {
-			waitBuf := kvGetBytes([]byte("wt"))
-			if waitBuf != nil && len(waitBuf) >= 8 {
-				blocksLeft = binary.LittleEndian.Uint64(waitBuf)
-			}
-		} else if phase == "crashed" {
+		if phase == "open" || phase == "crashed" {
 			blocksLeft = binary.LittleEndian.Uint64(round[16:24])
 		}
 	}
 
-	// Players.
 	betIDs := loadBetIDs()
 	playersBuf := make([]byte, 0, 512)
 	playersBuf = append(playersBuf, '[')
@@ -885,7 +808,6 @@ func query() *byte {
 	}
 	playersBuf = append(playersBuf, ']')
 
-	// History.
 	histBuf := kvGetBytes(keyHistory)
 	histJSON := make([]byte, 0, 128)
 	histJSON = append(histJSON, '[')
@@ -901,7 +823,6 @@ func query() *byte {
 	}
 	histJSON = append(histJSON, ']')
 
-	// Build response.
 	out := make([]byte, 0, 1024)
 	out = append(out, '{')
 	out = append(out, `"round":`...)
