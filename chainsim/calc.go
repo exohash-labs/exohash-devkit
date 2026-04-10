@@ -19,6 +19,7 @@ type KVStore interface {
 	Get(key []byte) ([]byte, bool)
 	Set(key []byte, value []byte)
 	Has(key []byte) bool
+	Delete(key []byte)
 }
 
 // MemKVStore is an in-memory KV store implementation.
@@ -42,6 +43,10 @@ func (s *MemKVStore) Set(key []byte, value []byte) {
 func (s *MemKVStore) Has(key []byte) bool {
 	_, ok := s.Data[string(key)]
 	return ok
+}
+
+func (s *MemKVStore) Delete(key []byte) {
+	delete(s.Data, string(key))
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +91,7 @@ func newWasmRuntime(ctx context.Context) (wazero.Runtime, error) {
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostKVGet), []api.ValueType{u32, u32}, []api.ValueType{u64}).Export("kv_get").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostKVSet), []api.ValueType{u32, u32, u32, u32}, []api.ValueType{}).Export("kv_set").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostKVHas), []api.ValueType{u32, u32}, []api.ValueType{u32}).Export("kv_has").
+		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostKVDelete), []api.ValueType{u32, u32}, []api.ValueType{}).Export("kv_delete").
 		// Scheduling
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostScheduleWakeup), []api.ValueType{u64, u64}, []api.ValueType{}).Export("schedule_wakeup").
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostCancelWakeup), []api.ValueType{u64}, []api.ValueType{}).Export("cancel_wakeup").
@@ -314,6 +320,12 @@ func hostKVHas(ctx context.Context, mod api.Module, stack []uint64) {
 	} else {
 		stack[0] = 0
 	}
+}
+
+func hostKVDelete(ctx context.Context, mod api.Module, stack []uint64) {
+	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
+	keyBytes, _ := mod.Memory().Read(keyPtr, keyLen)
+	kvStoreFromCtx(ctx).Delete(keyBytes)
 }
 
 func hostScheduleWakeup(ctx context.Context, _ api.Module, stack []uint64) {
