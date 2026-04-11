@@ -88,16 +88,20 @@ func TestCrashHouseEdge(t *testing.T) {
 		if betsPlaced > lastReport && betsPlaced%10000 == 0 {
 			lastReport = betsPlaced
 			profit := int64(totalStaked) - int64(totalPayout)
-			fmt.Fprintf(os.Stderr, "  %dk bets: edge=%.2f%% blocks=%d\n",
-				betsPlaced/1000, float64(profit)/float64(totalStaked)*100, blocks)
+			wasmMem := chain.WasmMemorySize(1)
+			recycled := chainsim.WasmRecycleCount()
+			fmt.Fprintf(os.Stderr, "  %dk bets: edge=%.2f%% wasm_mem=%dKB recycled=%d blocks=%d\n",
+				betsPlaced/1000, float64(profit)/float64(totalStaked)*100, wasmMem/1024, recycled, blocks)
 		}
 	}
 
 	profit := int64(totalStaked) - int64(totalPayout)
 	edge := float64(profit) / float64(totalStaked) * 100
 
-	fmt.Fprintf(os.Stderr, "\n=== CRASH %dK — cashout 1.5x ===\nBets: %d | Edge: %.2f%%\n",
-		totalBets/1000, betsPlaced, edge)
+	wasmMem := chain.WasmMemorySize(1)
+	recycled := chainsim.WasmRecycleCount()
+	fmt.Fprintf(os.Stderr, "\n=== CRASH %dK — cashout 1.5x ===\nBets: %d | Edge: %.2f%% | WASM mem: %dKB | recycled: %d\n",
+		totalBets/1000, betsPlaced, edge, wasmMem/1024, recycled)
 
 	if edge < 0.5 || edge > 4.0 {
 		t.Errorf("house edge %.2f%% outside expected range [0.5%%, 4.0%%]", edge)

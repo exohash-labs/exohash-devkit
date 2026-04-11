@@ -168,6 +168,17 @@ func (c *Chain) KVUsage(calcID uint64) uint64 {
 	return c.kvUsage[calcID]
 }
 
+// WasmMemorySize returns the current WASM linear memory size in bytes for a game.
+func (c *Chain) WasmMemorySize(calcID uint64) uint32 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	game, ok := c.games[calcID]
+	if !ok || game.inst == nil || game.inst.mod == nil {
+		return 0
+	}
+	return game.inst.mod.Memory().Size()
+}
+
 func sharesKey(bankrollID uint64, addr string) string {
 	return fmt.Sprintf("%d:%s", bankrollID, addr)
 }

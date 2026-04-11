@@ -66,8 +66,9 @@ func TestDiceHouseEdge(t *testing.T) {
 			profit := int64(totalStaked) - int64(totalPayout)
 			edge := float64(profit) / float64(totalStaked) * 100
 			kvUsage := chain.KVUsage(1)
-			fmt.Fprintf(os.Stderr, "  %dk bets: edge=%.2f%% kv=%d blocks=%d\n",
-				betsPlaced/1000, edge, kvUsage, blocks)
+			wasmMem := chain.WasmMemorySize(1)
+			fmt.Fprintf(os.Stderr, "  %dk bets: edge=%.2f%% kv=%d wasm_mem=%dKB blocks=%d\n",
+				betsPlaced/1000, edge, kvUsage, wasmMem/1024, blocks)
 		}
 	}
 
@@ -75,8 +76,10 @@ func TestDiceHouseEdge(t *testing.T) {
 	edge := float64(profit) / float64(totalStaked) * 100
 	kvUsage := chain.KVUsage(1)
 
-	fmt.Fprintf(os.Stderr, "\n=== DICE %dK — 50%% chance ===\nBets: %d | Edge: %.2f%% | KV: %d bytes\n",
-		totalBets/1000, betsPlaced, edge, kvUsage)
+	wasmMem := chain.WasmMemorySize(1)
+	recycled := chainsim.WasmRecycleCount()
+	fmt.Fprintf(os.Stderr, "\n=== DICE %dK — 50%% chance ===\nBets: %d | Edge: %.2f%% | KV: %d bytes | WASM mem: %dKB | recycled: %d\n",
+		totalBets/1000, betsPlaced, edge, kvUsage, wasmMem/1024, recycled)
 
 	if edge < 0.5 || edge > 4.0 {
 		t.Errorf("house edge %.2f%% outside expected range [0.5%%, 4.0%%]", edge)

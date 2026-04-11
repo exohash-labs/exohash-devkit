@@ -10,11 +10,10 @@ import (
 
 // gameState holds a compiled WASM game module and its persistent instance.
 type gameState struct {
-	calcID    uint64
-	compiled  interface{} // wazero.CompiledModule (stored as interface to avoid nil type issues)
-	inst      *wasmInstance
-	kv        *MemKVStore
-	allocCount uint64 // track alloc calls for periodic re-instantiation
+	calcID   uint64
+	compiled interface{} // wazero.CompiledModule (stored as interface to avoid nil type issues)
+	inst     *wasmInstance
+	kv       *MemKVStore
 }
 
 // RegisterGame compiles a WASM calculator and registers it with the chain.
@@ -166,23 +165,29 @@ func (c *Chain) wasmCtxForGame(calcID uint64) (context.Context, *gameState, erro
 	return ctx, game, nil
 }
 
-// reinstantiateThreshold controls how many alloc calls before we recycle the
-// WASM instance to reclaim linear memory. Wazero's linear memory only grows,
-// never shrinks within a single module instance.
-const reinstantiateThreshold = 5000
+// wasmMemoryLimit is the maximum WASM linear memory (bytes) before an
+// instance is recycled. Wazero's linear memory only grows, never shrinks.
+// Set to initial 4-page size so any growth triggers recycling.
+const wasmMemoryLimit = 4 * 65536 // 256 KB (4 WASM pages)
 
-// reinstantiateIfNeeded closes the current WASM instance and creates a fresh
-// one from the compiled module, preserving KV state. Caller must hold c.mu.
+var wasmRecycleCount uint64
+
+// WasmRecycleCount returns how many times instances were recycled.
+func WasmRecycleCount() uint64 { return wasmRecycleCount }
+
+// reinstantiateIfNeeded checks the WASM instance's linear memory size and
+// recreates it from the compiled module if it exceeds wasmMemoryLimit.
+// KV state is external (MemKVStore), so nothing is lost. Caller must hold c.mu.
 func (c *Chain) reinstantiateIfNeeded(calcID uint64) {
 	game, ok := c.games[calcID]
-	if !ok {
+	if !ok || game.inst == nil {
 		return
 	}
-	game.allocCount++
-	if game.allocCount < reinstantiateThreshold {
+
+	memSize := game.inst.mod.Memory().Size()
+	if memSize <= wasmMemoryLimit {
 		return
 	}
-	game.allocCount = 0
 
 	ctx := withChain(withKVStore(context.Background(), game.kv), c)
 	compiled, ok := game.compiled.(wazero.CompiledModule)
@@ -190,14 +195,13 @@ func (c *Chain) reinstantiateIfNeeded(calcID uint64) {
 		return
 	}
 
-	// Close old instance.
 	game.inst.close(ctx)
 
-	// Create fresh instance — KV store is external, so state is preserved.
 	inst, err := instantiateModule(ctx, c.wasmRT, compiled)
 	if err != nil {
 		fmt.Printf("reinstantiate error (calc=%d): %v\n", calcID, err)
 		return
 	}
 	game.inst = inst
+	wasmRecycleCount++
 }
