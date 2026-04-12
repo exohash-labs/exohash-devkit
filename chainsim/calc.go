@@ -81,7 +81,8 @@ func chainFromCtx(ctx context.Context) *Chain {
 // ---------------------------------------------------------------------------
 
 func newWasmRuntime(ctx context.Context) (wazero.Runtime, error) {
-	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigCompiler())
+	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfigCompiler().
+		WithMemoryLimitPages(8)) // 512 KB max — hard cap prevents memory.grow abuse
 	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
 
 	u32 := api.ValueTypeI32

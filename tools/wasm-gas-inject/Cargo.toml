@@ -1,0 +1,8 @@
+[package]
+name = "wasm-gas-inject"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wasmparser = "0.225"
+wasm-encoder = { version = "0.225", features = ["wasmparser"] }
