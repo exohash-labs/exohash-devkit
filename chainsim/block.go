@@ -67,18 +67,23 @@ func (c *Chain) AdvanceBlock() BlockResult {
 
 	// Drain events while still holding the lock — prevents concurrent
 	// PlaceBet/BetAction from stealing block_update events.
-	events := make([]CalcEvent, len(c.calcEvents))
-	copy(events, c.calcEvents)
+	calcEvents := make([]CalcEvent, len(c.calcEvents))
+	copy(calcEvents, c.calcEvents)
 	c.calcEvents = c.calcEvents[:0]
 
 	settlements := make([]Settlement, len(c.settlements))
 	copy(settlements, c.settlements)
 	c.settlements = c.settlements[:0]
 
+	chainEvents := make([]ChainEvent, len(c.events))
+	copy(chainEvents, c.events)
+	c.events = c.events[:0]
+
 	return BlockResult{
 		Block:       block,
-		CalcEvents:  events,
+		CalcEvents:  calcEvents,
 		Settlements: settlements,
+		Events:      chainEvents,
 	}
 }
 

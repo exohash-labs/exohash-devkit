@@ -51,6 +51,7 @@ type BlockResult struct {
 	Block       Block
 	CalcEvents  []CalcEvent
 	Settlements []Settlement
+	Events      []ChainEvent
 }
 
 // Chain is the in-memory chain state with integrated WASM execution.

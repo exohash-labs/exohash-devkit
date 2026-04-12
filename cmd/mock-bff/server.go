@@ -20,8 +20,9 @@ import (
 // ---------------------------------------------------------------------------
 
 type StreamEvent struct {
-	Height       uint64        `json:"height"`
-	Time         string        `json:"time,omitempty"`
+	Height       int64         `json:"height"`
+	Time         string        `json:"time"`
+	TxCount      int           `json:"txCount"`
 	BeaconSeed   string        `json:"beaconSeed,omitempty"`
 	BeaconPaused bool          `json:"beaconPaused,omitempty"`
 	BetsCreated  []BetCreated  `json:"betsCreated,omitempty"`
@@ -69,7 +70,7 @@ type GameInfo struct {
 	CalcID      uint64                              `json:"calcId"`
 	Name        string                              `json:"name"`
 	Engine      string                              `json:"engine,omitempty"`
-	HouseEdgeBp int                                 `json:"houseEdgeBp,omitempty"`
+	HouseEdgeBp uint64                               `json:"houseEdgeBp,omitempty"`
 	Status      int                                 `json:"status"` // 0=active, 1=paused, 2=killed
 	Errors      map[string]map[string]string        `json:"errors,omitempty"`
 }
@@ -107,7 +108,7 @@ func NewServer(chain *chainsim.Chain, cfg *Config) *Server {
 
 	// Build game info cache.
 	for _, g := range cfg.Games {
-		info := GameInfo{CalcID: g.CalcID, Name: g.Name, HouseEdgeBp: int(g.HouseEdgeBp), Status: 0}
+		info := GameInfo{CalcID: g.CalcID, Name: g.Name, HouseEdgeBp: g.HouseEdgeBp, Status: 0}
 		// Try to get engine + errors from WASM info.
 		if raw, err := chain.GameInfo(g.CalcID); err == nil && raw != nil {
 			var meta struct {
@@ -171,7 +172,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// Connected signal.
 	replayTrue := true
-	connected := StreamEvent{Connected: true, Height: s.chain.Height(), Replay: &replayTrue}
+	connected := StreamEvent{Connected: true, Height: int64(s.chain.Height()), Replay: &replayTrue}
 	data, _ := json.Marshal(connected)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
@@ -192,7 +193,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// End of replay.
 	replayFalse := false
-	endReplay := StreamEvent{Replay: &replayFalse, Height: s.chain.Height()}
+	endReplay := StreamEvent{Replay: &replayFalse, Height: int64(s.chain.Height())}
 	data, _ = json.Marshal(endReplay)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
@@ -252,7 +253,7 @@ func (s *Server) handlePlaceBet(w http.ResponseWriter, r *http.Request) {
 	// Drain and broadcast calc events from WASM.
 	wasmEvents := s.chain.DrainCalcEvents()
 	ev := &StreamEvent{
-		Height: s.chain.Height(),
+		Height: int64(s.chain.Height()),
 		Time:   time.Now().UTC().Format(time.RFC3339),
 		BetsCreated: []BetCreated{{
 			BetID:        betID,
@@ -308,7 +309,7 @@ func (s *Server) handleBetAction(w http.ResponseWriter, r *http.Request) {
 	wasmEvents := s.chain.DrainCalcEvents()
 	if len(wasmEvents) > 0 {
 		ev := &StreamEvent{
-			Height: s.chain.Height(),
+			Height: int64(s.chain.Height()),
 			Time:   time.Now().UTC().Format(time.RFC3339),
 		}
 		for _, e := range wasmEvents {
@@ -527,14 +528,24 @@ func (s *Server) advanceBlock() {
 		})
 	}
 
-	ev := &StreamEvent{
-		Height:     block.Height,
-		Time:       time.Now().UTC().Format(time.RFC3339),
-		CalcEvents: calcEvents,
-		BetsSettled: settled,
+	// Convert chain events to SystemEvents.
+	var sysEvents []SystemEvent
+	for _, ce := range result.Events {
+		sysEvents = append(sysEvents, SystemEvent{
+			Type: ce.Type,
+			Data: ce.Attrs,
+		})
 	}
 
-	if len(calcEvents) > 0 || len(settled) > 0 || block.Height%10 == 0 {
+	ev := &StreamEvent{
+		Height:       int64(block.Height),
+		Time:         time.Now().UTC().Format(time.RFC3339),
+		CalcEvents:   calcEvents,
+		BetsSettled:  settled,
+		SystemEvents: sysEvents,
+	}
+
+	if len(calcEvents) > 0 || len(settled) > 0 || len(sysEvents) > 0 || block.Height%10 == 0 {
 		s.bufferAndBroadcast(ev)
 	}
 }
@@ -544,7 +555,7 @@ func (s *Server) advanceBlock() {
 // ---------------------------------------------------------------------------
 
 func (s *Server) bufferAndBroadcast(ev *StreamEvent) {
-	ev.BeaconSeed = hex.EncodeToString(s.chain.GetRNG(ev.Height))
+	ev.BeaconSeed = hex.EncodeToString(s.chain.GetRNG(uint64(ev.Height)))
 
 	s.mu.Lock()
 	s.globalBuf = append(s.globalBuf, *ev)
