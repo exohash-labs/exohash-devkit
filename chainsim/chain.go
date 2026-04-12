@@ -19,7 +19,7 @@ type CalcMode uint8
 const (
 	CalcModePlaceBet    CalcMode = 1 // MsgPlaceBet — player joining a game
 	CalcModeBetAction   CalcMode = 2 // MsgBetAction — player in-game action
-	CalcModeBlockUpdate CalcMode = 3 // BeginBlock — wakeup/tick processing
+	CalcModeBlockUpdate CalcMode = 3 // BeginBlock — seed-based tick processing
 	CalcModeInitGame    CalcMode = 4 // Kickstart — one-time game setup
 )
 
@@ -76,10 +76,6 @@ type Chain struct {
 	// Execution mode — mirrors keeper CalcMode.
 	mode         CalcMode
 	activeCalcID uint64 // which game is currently executing WASM
-
-	// Wakeup scheduler — mirrors keeper BetWakeupsByHeight.
-	wakeups      map[uint64][]uint64 // height → []betID
-	wakeupBetIDs []uint64            // current block_update batch
 
 	// Pending actions — mirrors keeper EngineKV pending_action/{betID}.
 	pendingActions map[uint64][]byte
@@ -139,7 +135,6 @@ func NewWithParams(params Params, seed uint64) *Chain {
 		userShares:     make(map[string]uint64),
 		betsByAddr:     make(map[string][]uint64),
 		betGame:        make(map[uint64]uint64),
-		wakeups:        make(map[uint64][]uint64),
 		pendingActions: make(map[uint64][]byte),
 		kvUsage:        make(map[uint64]uint64),
 		gasBalance:     make(map[uint64]uint64),

@@ -1,10 +1,10 @@
-// Crash calculator — WASM protocol v2.
+// Crash calculator — WASM protocol v3.
 //
 // Multiplayer crash game with rising multiplier and random crash point.
 //
 // Phases: open → tick → crashed → open → ...
 //
-// block_update receives DKG seed directly (no get_rng, no wakeups).
+// block_update receives 32-byte DKG seed directly.
 // Game is called every block and manages its own state via KV.
 //
 // Exports: alloc, dealloc, place_bet, bet_action, block_update, query, info, init_game

@@ -1,8 +1,8 @@
-// Mines calculator — WASM protocol v2.
+// Mines calculator — WASM protocol v3.
 //
 // 5x5 minefield. Player reveals tiles, avoids mines, cashes out.
 //
-// block_update receives DKG seed directly (no get_rng, no wakeups).
+// block_update receives 32-byte DKG seed directly.
 // Two-list architecture: active bets (idle, have timeout deadline) and
 // RNG-pending bets (waiting for seed to resolve reveal). block_update
 // skips iteration when no RNG pending and no timeouts due — O(1) idle cost.

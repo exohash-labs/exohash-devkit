@@ -430,20 +430,6 @@ func (c *Chain) GetRNG(height uint64) []byte {
 	return c.getRNGLocked(height)
 }
 
-// GetBetCount returns wakeup batch size. Public wrapper.
-func (c *Chain) GetBetCount() uint32 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.getBetCountLocked()
-}
-
-// GetBetID returns bet ID at index. Public wrapper.
-func (c *Chain) GetBetID(index uint32) uint64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.getBetIDLocked(index)
-}
-
 // GetPendingAction returns queued action. Public wrapper.
 func (c *Chain) GetPendingAction(betID uint64) []byte {
 	c.mu.Lock()

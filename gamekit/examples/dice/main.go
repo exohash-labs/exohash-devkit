@@ -1,11 +1,12 @@
-// Dice calculator — WASM protocol v2.
+// Dice calculator — WASM protocol v3.
 //
 // Exports: alloc, dealloc, place_bet, bet_action, block_update, info
 // Imports: env.kv_get, env.kv_set, env.kv_delete,
-//          env.reserve, env.settle, env.emit_event
+//          env.reserve, env.settle, env.emit_event,
+//          env.get_gas_budget, env.get_gas_used
 //
-// block_update receives DKG seed directly (no get_rng).
-// Game manages its own pending bet list in KV (no wakeups).
+// block_update receives 32-byte DKG seed directly.
+// Game manages its own pending bet list in KV.
 package main
 
 import (
