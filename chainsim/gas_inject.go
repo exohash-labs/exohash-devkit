@@ -227,6 +227,14 @@ func instrumentFunction(funcData []byte, gasGlobalIdx uint32) ([]byte, error) {
 			return nil, fmt.Errorf("disallowed opcode 0x%02x", opcode)
 		}
 
+		// Reject global.set targeting the gas_used global.
+		if opcode == 0x24 {
+			idx, _ := readLEB128u(funcData[pos:])
+			if idx == gasGlobalIdx {
+				return nil, fmt.Errorf("forbidden: global.set targeting gas_used (global %d)", gasGlobalIdx)
+			}
+		}
+
 		if opcode == 0x03 { // loop
 			out = append(out, 0x03)
 			out = append(out, funcData[pos]) // block type

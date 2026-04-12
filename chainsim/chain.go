@@ -244,7 +244,7 @@ func (c *Chain) creditGas(calcID, amount uint64) {
 }
 
 // totalGasUsed returns the gas delta for the current call (WASM + host unified).
-// Returns 0 on underflow (instance recycled mid-call).
+// Returns MaxUint64 on underflow (game manipulated gas_used global downward) → forces kill.
 // Caller must hold c.mu.
 func (c *Chain) totalGasUsed(calcID uint64) uint64 {
 	game, ok := c.games[calcID]
@@ -253,7 +253,7 @@ func (c *Chain) totalGasUsed(calcID uint64) uint64 {
 	}
 	current := game.inst.gasGlobal.Get()
 	if current < c.lastWasmGas {
-		return 0
+		return ^uint64(0) // underflow → force kill
 	}
 	return current - c.lastWasmGas
 }
