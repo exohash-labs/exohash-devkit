@@ -3,7 +3,9 @@
 // 5x5 minefield. Player reveals tiles, avoids mines, cashes out.
 //
 // block_update receives DKG seed directly (no get_rng, no wakeups).
-// Game tracks active bets in KV, processes them each block.
+// Two-list architecture: active bets (idle, have timeout deadline) and
+// RNG-pending bets (waiting for seed to resolve reveal). block_update
+// skips iteration when no RNG pending and no timeouts due — O(1) idle cost.
 //
 // Exports: alloc, dealloc, place_bet, bet_action, block_update, query, info, init_game
 // Imports: env.kv_get, env.kv_set, env.kv_delete,
@@ -39,6 +41,12 @@ func host_get_bettor(betID uint64, outPtr uint32) uint32
 
 //go:wasmimport env emit_event
 func host_emit_event(topicPtr, topicLen, dataPtr, dataLen uint32)
+
+//go:wasmimport env get_gas_budget
+func get_gas_budget() uint64
+
+//go:wasmimport env get_gas_used
+func get_gas_used() uint64
 
 // ---------------------------------------------------------------------------
 // Memory
@@ -86,16 +94,64 @@ const (
 //   [18]     phase         u8
 //   [19..22] board_mask    u32
 //   [23]     pending_tile  u8
-//   [24..31] timeout_left  u64 (blocks remaining, decremented each block)
+//   [24..31] timeout_at    u64 (absolute block counter deadline)
 const betSize = 32
 
-var keyActiveBets = []byte("ab") // active bet ID list
+// KV keys.
+var (
+	keyActiveList = []byte("al") // bet IDs in phaseActive
+	keyRNGList    = []byte("rl") // bet IDs in phaseWaitingRNG
+	keyBlockCount = []byte("bc") // u64 block counter
+	keyMinTimeout = []byte("mt") // u64 earliest timeout_at (0 = none)
+)
+
+// betKeyBuf is reused across calls to avoid heap allocation.
+var betKeyBuf [9]byte
 
 func betKey(id uint64) []byte {
-	buf := make([]byte, 9)
-	buf[0] = 'b'
-	binary.LittleEndian.PutUint64(buf[1:], id)
-	return buf
+	betKeyBuf[0] = 'b'
+	binary.LittleEndian.PutUint64(betKeyBuf[1:], id)
+	return betKeyBuf[:]
+}
+
+// ---------------------------------------------------------------------------
+// Block counter + min-timeout helpers
+// ---------------------------------------------------------------------------
+
+func getBlockCount() uint64 {
+	v := kvGetBytes(keyBlockCount)
+	if v == nil || len(v) < 8 {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(v)
+}
+
+func setBlockCount(bc uint64) {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], bc)
+	kvSet(keyBlockCount, buf[:])
+}
+
+func getMinTimeout() uint64 {
+	v := kvGetBytes(keyMinTimeout)
+	if v == nil || len(v) < 8 {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(v)
+}
+
+func setMinTimeout(mt uint64) {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], mt)
+	kvSet(keyMinTimeout, buf[:])
+}
+
+// updateMinTimeout sets min_timeout to the lesser of current and candidate.
+func updateMinTimeout(candidate uint64) {
+	cur := getMinTimeout()
+	if cur == 0 || candidate < cur {
+		setMinTimeout(candidate)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +178,8 @@ func init_game(sentinelID, bankrollID, calculatorID uint64) {
 		}
 	}
 	kvSet([]byte("mult_table"), table)
+	setBlockCount(0)
+	setMinTimeout(0)
 }
 
 func getFairMultBP(minesIdx, revealsIdx uint64) uint64 {
@@ -171,16 +229,20 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 		return 3
 	}
 
+	bc := getBlockCount()
+	deadline := bc + timeoutBlks
+
 	bet := make([]byte, betSize)
 	binary.LittleEndian.PutUint64(bet[0:], betID)
 	binary.LittleEndian.PutUint64(bet[8:], stake)
 	bet[16] = minesCount
 	bet[17] = 0
 	bet[18] = phaseActive
-	binary.LittleEndian.PutUint64(bet[24:], timeoutBlks) // countdown starts now
+	binary.LittleEndian.PutUint64(bet[24:], deadline)
 	kvSet(betKey(betID), bet)
 
-	addActiveBet(betID)
+	appendToList(keyActiveList, betID)
+	updateMinTimeout(deadline)
 
 	addr := getBettorAddr(betID)
 	emitJSON("joined", "bet_id", betID, "addr", addr, "stake", stake, "mines", uint64(minesCount))
@@ -230,6 +292,10 @@ func handleReveal(betID uint64, payload []byte) uint32 {
 	bet[18] = phaseWaitingRNG
 	bet[23] = tile
 	kvSet(betKey(betID), bet)
+
+	// Move from active list to RNG list.
+	removeFromList(keyActiveList, betID)
+	appendToList(keyRNGList, betID)
 	return 0
 }
 
@@ -255,68 +321,104 @@ func handleCashout(betID uint64) uint32 {
 	host_settle(betID, payout, kindWin)
 	addr := getBettorAddr(betID)
 	emitJSON("settled", "bet_id", betID, "addr", addr, "payout", payout, "kind", uint64(kindWin), "reason", "cashout")
-	clearBet(betID)
+	kvDelete(betKey(betID))
+	removeFromList(keyActiveList, betID)
 	return 0
 }
 
 // ---------------------------------------------------------------------------
-// block_update — resolve reveals + timeout
+// block_update — fast-path skip, two-list processing
 // ---------------------------------------------------------------------------
 
 //export block_update
-func block_update(seedPtr, seedLen uint32) {
-	activeBets := loadActiveBets()
-	if len(activeBets) == 0 {
-		return
+func block_update(seedPtr uint32) {
+	bc := getBlockCount() + 1
+	setBlockCount(bc)
+
+	// 1. Resolve RNG-pending bets.
+	rngList := loadList(keyRNGList)
+	if len(rngList) > 0 && seedPtr != 0 {
+		seed := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), 32)
+		// Process pending — resolving may add bets back to active list.
+		budget := get_gas_budget()
+		var unresolved []uint64
+		for _, betID := range rngList {
+			if get_gas_used()+80_000 > budget {
+				unresolved = append(unresolved, betID)
+				continue
+			}
+			resolveReveal(betID, seed, bc)
+		}
+		// Rewrite RNG list with any unresolved bets.
+		if len(unresolved) == 0 {
+			kvDelete(keyRNGList)
+		} else {
+			buf := make([]byte, len(unresolved)*8)
+			for i, id := range unresolved {
+				binary.LittleEndian.PutUint64(buf[i*8:], id)
+			}
+			kvSet(keyRNGList, buf)
+		}
 	}
 
-	var seed []byte
-	if seedLen > 0 {
-		seed = unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), seedLen)
-	}
-
-	for _, betID := range activeBets {
-		processBet(betID, seed)
+	// 2. Check timeouts — only scan if earliest deadline reached.
+	mt := getMinTimeout()
+	if mt > 0 && bc >= mt {
+		scanTimeouts(bc)
 	}
 }
 
-func processBet(betID uint64, seed []byte) {
+func scanTimeouts(bc uint64) {
+	list := loadList(keyActiveList)
+	if len(list) == 0 {
+		setMinTimeout(0)
+		return
+	}
+
+	budget := get_gas_budget()
+	var newMin uint64
+	timedOut := make([]uint64, 0, 8)
+
+	for _, betID := range list {
+		bet := kvGetBytes(betKey(betID))
+		if bet == nil || len(bet) < betSize {
+			timedOut = append(timedOut, betID)
+			continue
+		}
+		deadline := binary.LittleEndian.Uint64(bet[24:32])
+		if bc >= deadline {
+			if get_gas_used()+80_000 > budget {
+				// Can't process this timeout — leave for next block.
+				if newMin == 0 || deadline < newMin {
+					newMin = deadline
+				}
+				continue
+			}
+			timedOut = append(timedOut, betID)
+			handleTimeout(betID, bet)
+		} else {
+			if newMin == 0 || deadline < newMin {
+				newMin = deadline
+			}
+		}
+	}
+
+	// Remove timed-out bets from active list.
+	for _, betID := range timedOut {
+		removeFromList(keyActiveList, betID)
+	}
+	setMinTimeout(newMin)
+}
+
+func resolveReveal(betID uint64, seed []byte, bc uint64) {
 	bet := kvGetBytes(betKey(betID))
 	if bet == nil || len(bet) < betSize {
-		removeActiveBet(betID)
 		return
 	}
 
-	phase := bet[18]
-
-	// Handle pending reveal.
-	if phase == phaseWaitingRNG {
-		if seed == nil {
-			return // no RNG — wait
-		}
-		resolveReveal(betID, bet, seed)
-		return
-	}
-
-	// Handle timeout for active bets.
-	if phase == phaseActive {
-		timeoutLeft := binary.LittleEndian.Uint64(bet[24:32])
-		if timeoutLeft <= 1 {
-			handleTimeout(betID, bet)
-			return
-		}
-		timeoutLeft--
-		binary.LittleEndian.PutUint64(bet[24:], timeoutLeft)
-		kvSet(betKey(betID), bet)
-		emitBetState(betID, bet, timeoutLeft)
-	}
-}
-
-func resolveReveal(betID uint64, bet []byte, seed []byte) {
 	stake := binary.LittleEndian.Uint64(bet[8:16])
 	minesCount := bet[16]
 	revealed := bet[17]
-	boardMask := binary.LittleEndian.Uint32(bet[19:23])
 	tile := bet[23]
 
 	safe := uint64(boardSize) - uint64(minesCount)
@@ -342,12 +444,13 @@ func resolveReveal(betID uint64, bet []byte, seed []byte) {
 		host_settle(betID, 0, kindLoss)
 		emitJSON("reveal", "bet_id", betID, "addr", addr, "tile", uint64(tile), "safe", uint64(0), "revealed", uint64(revealed), "mult_bp", uint64(0), "payout", uint64(0))
 		emitJSON("settled", "bet_id", betID, "addr", addr, "payout", uint64(0), "kind", uint64(kindLoss), "reason", "mine")
-		clearBet(betID)
+		kvDelete(betKey(betID))
 		return
 	}
 
 	// Safe tile.
 	revealed++
+	boardMask := binary.LittleEndian.Uint32(bet[19:23])
 	boardMask |= 1 << tile
 	bet[17] = revealed
 	binary.LittleEndian.PutUint32(bet[19:23], boardMask)
@@ -357,19 +460,22 @@ func resolveReveal(betID uint64, bet []byte, seed []byte) {
 	edgedMultBP := currentMultBP * (10000 - houseEdgeBP) / 10000
 	payout := mulDiv(stake, edgedMultBP, 10000)
 
-	// Reset timeout.
-	binary.LittleEndian.PutUint64(bet[24:], timeoutBlks)
-	kvSet(betKey(betID), bet)
-
 	emitJSON("reveal", "bet_id", betID, "addr", addr, "tile", uint64(tile), "safe", uint64(1), "revealed", uint64(revealed), "mult_bp", edgedMultBP, "payout", payout)
 
 	// Auto-cashout at max reveals.
 	if uint64(revealed) >= effectiveMax {
 		host_settle(betID, payout, kindWin)
 		emitJSON("settled", "bet_id", betID, "addr", addr, "payout", payout, "kind", uint64(kindWin), "reason", "max_reveals")
-		clearBet(betID)
+		kvDelete(betKey(betID))
 		return
 	}
+
+	// Reset timeout and move back to active list.
+	deadline := bc + timeoutBlks
+	binary.LittleEndian.PutUint64(bet[24:], deadline)
+	kvSet(betKey(betID), bet)
+	appendToList(keyActiveList, betID)
+	updateMinTimeout(deadline)
 }
 
 func handleTimeout(betID uint64, bet []byte) {
@@ -380,7 +486,7 @@ func handleTimeout(betID uint64, bet []byte) {
 		stake := binary.LittleEndian.Uint64(bet[8:16])
 		host_settle(betID, stake, kindRefund)
 		emitJSON("settled", "bet_id", betID, "addr", addr, "payout", stake, "kind", uint64(kindRefund), "reason", "timeout_refund")
-		clearBet(betID)
+		kvDelete(betKey(betID))
 		return
 	}
 
@@ -392,53 +498,29 @@ func handleTimeout(betID uint64, bet []byte) {
 
 	host_settle(betID, payout, kindWin)
 	emitJSON("settled", "bet_id", betID, "addr", addr, "payout", payout, "kind", uint64(kindWin), "reason", "timeout_cashout")
-	clearBet(betID)
-}
-
-func emitBetState(betID uint64, bet []byte, timeoutLeft uint64) {
-	revealed := bet[17]
-	minesCount := bet[16]
-
-	multBP := uint64(10000)
-	payout := uint64(0)
-	if revealed > 0 {
-		multBP = getFairMultBP(uint64(minesCount-1), uint64(revealed-1))
-		multBP = multBP * (10000 - houseEdgeBP) / 10000
-		stake := binary.LittleEndian.Uint64(bet[8:16])
-		payout = mulDiv(stake, multBP, 10000)
-	}
-
-	emitJSON("state",
-		"phase", "active",
-		"bet_id", betID,
-		"mines", uint64(minesCount),
-		"revealed", uint64(revealed),
-		"mult_bp", multBP,
-		"payout", payout,
-		"timeout_left", timeoutLeft,
-	)
+	kvDelete(betKey(betID))
 }
 
 // ---------------------------------------------------------------------------
-// Active bet list helpers
+// List helpers — swap-with-last removal (no allocation)
 // ---------------------------------------------------------------------------
 
-func addActiveBet(betID uint64) {
-	list := kvGetBytes(keyActiveBets)
-	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buf, betID)
+func appendToList(key []byte, betID uint64) {
+	list := kvGetBytes(key)
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], betID)
 	if list == nil {
-		kvSet(keyActiveBets, buf)
+		kvSet(key, buf[:])
 	} else {
 		newList := make([]byte, len(list)+8)
 		copy(newList, list)
-		copy(newList[len(list):], buf)
-		kvSet(keyActiveBets, newList)
+		copy(newList[len(list):], buf[:])
+		kvSet(key, newList)
 	}
 }
 
-func loadActiveBets() []uint64 {
-	list := kvGetBytes(keyActiveBets)
+func loadList(key []byte) []uint64 {
+	list := kvGetBytes(key)
 	if list == nil {
 		return nil
 	}
@@ -450,30 +532,34 @@ func loadActiveBets() []uint64 {
 	return ids
 }
 
-func removeActiveBet(betID uint64) {
-	list := kvGetBytes(keyActiveBets)
+func removeFromList(key []byte, betID uint64) {
+	list := kvGetBytes(key)
 	if list == nil {
 		return
 	}
-	newList := make([]byte, 0, len(list))
-	for i := 0; i+8 <= len(list); i += 8 {
-		id := binary.LittleEndian.Uint64(list[i:])
-		if id != betID {
-			buf := make([]byte, 8)
-			binary.LittleEndian.PutUint64(buf, id)
-			newList = append(newList, buf...)
+	n := len(list)
+	for i := 0; i+8 <= n; i += 8 {
+		if binary.LittleEndian.Uint64(list[i:]) == betID {
+			last := n - 8
+			if i != last {
+				copy(list[i:i+8], list[last:last+8])
+			}
+			if last == 0 {
+				kvDelete(key)
+			} else {
+				kvSet(key, list[:last])
+			}
+			return
 		}
-	}
-	if len(newList) == 0 {
-		kvDelete(keyActiveBets)
-	} else {
-		kvSet(keyActiveBets, newList)
 	}
 }
 
-func clearBet(betID uint64) {
-	kvDelete(betKey(betID))
-	removeActiveBet(betID)
+func listLen(key []byte) int {
+	list := kvGetBytes(key)
+	if list == nil {
+		return 0
+	}
+	return len(list) / 8
 }
 
 // ---------------------------------------------------------------------------

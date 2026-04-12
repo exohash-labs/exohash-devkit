@@ -35,6 +35,12 @@ func host_settle(betID, payout uint64, kind uint32) uint32
 //go:wasmimport env emit_event
 func host_emit_event(topicPtr, topicLen, dataPtr, dataLen uint32)
 
+//go:wasmimport env get_gas_budget
+func get_gas_budget() uint64
+
+//go:wasmimport env get_gas_used
+func get_gas_used() uint64
+
 // ---------------------------------------------------------------------------
 // Memory management
 // ---------------------------------------------------------------------------
@@ -109,7 +115,7 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 // ---------------------------------------------------------------------------
 
 //export block_update
-func block_update(seedPtr, seedLen uint32) {
+func block_update(seedPtr uint32) {
 	// Read pending bet list.
 	pending := kvGetBytes(keyPendingList)
 	if len(pending) == 0 {
@@ -117,19 +123,30 @@ func block_update(seedPtr, seedLen uint32) {
 	}
 
 	// Need seed to settle.
-	if seedLen == 0 {
+	if seedPtr == 0 {
 		return // no RNG — wait for next block
 	}
-	seed := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), seedLen)
+	seed := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), 32)
 
-	// Settle all pending bets.
+	// Settle pending bets, paging within gas budget.
+	budget := get_gas_budget()
+	settled := 0
 	for i := 0; i+8 <= len(pending); i += 8 {
+		if get_gas_used()+50_000 > budget {
+			break // leave remaining for next block
+		}
 		betID := binary.LittleEndian.Uint64(pending[i : i+8])
 		settleBet(betID, seed)
+		settled++
 	}
 
-	// Clear pending list.
-	kvDelete(keyPendingList)
+	// Update pending list: remove settled, keep remainder.
+	remaining := pending[settled*8:]
+	if len(remaining) == 0 {
+		kvDelete(keyPendingList)
+	} else {
+		kvSet(keyPendingList, remaining)
+	}
 }
 
 func settleBet(betID uint64, seed []byte) {
@@ -211,11 +228,12 @@ func addPending(betID uint64) {
 // KV helpers
 // ---------------------------------------------------------------------------
 
+var betKeyBuf [9]byte
+
 func betKey(betID uint64) []byte {
-	buf := make([]byte, 9)
-	buf[0] = 'b'
-	binary.LittleEndian.PutUint64(buf[1:], betID)
-	return buf
+	betKeyBuf[0] = 'b'
+	binary.LittleEndian.PutUint64(betKeyBuf[1:], betID)
+	return betKeyBuf[:]
 }
 
 func kvSet(key, value []byte) {

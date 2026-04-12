@@ -28,8 +28,14 @@ func (c *Chain) RegisterGame(calcID uint64, wasmBytes []byte, name string, house
 
 	ctx := context.Background()
 
-	// Compile the module.
-	compiled, err := c.wasmRT.CompileModule(ctx, wasmBytes)
+	// Instrument WASM with gas metering.
+	instrumented, err := InjectGasMetering(wasmBytes)
+	if err != nil {
+		return fmt.Errorf("gas inject %s: %w", name, err)
+	}
+
+	// Compile the instrumented module.
+	compiled, err := c.wasmRT.CompileModule(ctx, instrumented)
 	if err != nil {
 		return fmt.Errorf("compile %s: %w", name, err)
 	}
@@ -87,6 +93,9 @@ func (c *Chain) RegisterGame(calcID uint64, wasmBytes []byte, name string, house
 		inst:     inst,
 		kv:       kv,
 	}
+
+	// Grant initial gas credits.
+	c.gasBalance[calcID] = GasInitialCredits
 
 	return nil
 }
@@ -203,5 +212,6 @@ func (c *Chain) reinstantiateIfNeeded(calcID uint64) {
 		return
 	}
 	game.inst = inst
+	c.lastWasmGas = 0 // new instance starts at gas_used=0
 	wasmRecycleCount++
 }

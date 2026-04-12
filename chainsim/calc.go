@@ -103,6 +103,9 @@ func newWasmRuntime(ctx context.Context) (wazero.Runtime, error) {
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetBettor), []api.ValueType{u64, u32}, []api.ValueType{u32}).Export("get_bettor").
 		// Events
 		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostEmitEvent), []api.ValueType{u32, u32, u32, u32}, []api.ValueType{}).Export("emit_event").
+		// Gas budget
+		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetGasBudget), []api.ValueType{}, []api.ValueType{u64}).Export("get_gas_budget").
+		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostGetGasUsed), []api.ValueType{}, []api.ValueType{u64}).Export("get_gas_used").
 		Instantiate(ctx)
 	if err != nil {
 		rt.Close(ctx)
@@ -124,6 +127,7 @@ type wasmInstance struct {
 	fnInitGame    api.Function
 	fnInfo        api.Function
 	fnQuery       api.Function
+	gasGlobal     api.MutableGlobal // cached gas_used exported mutable global (nil if absent)
 }
 
 func instantiateModule(ctx context.Context, rt wazero.Runtime, compiled wazero.CompiledModule) (*wasmInstance, error) {
@@ -147,6 +151,7 @@ func instantiateModule(ctx context.Context, rt wazero.Runtime, compiled wazero.C
 		fnInitGame:    mod.ExportedFunction("init_game"),
 		fnInfo:        mod.ExportedFunction("info"),
 		fnQuery:       mod.ExportedFunction("query"),
+		gasGlobal:     toMutableGlobal(mod.ExportedGlobal("gas_used")),
 	}
 	if inst.fnAlloc == nil || inst.fnPlaceBet == nil || inst.fnBlockUpdate == nil {
 		mod.Close(ctx)
@@ -209,10 +214,10 @@ func (w *wasmInstance) callBlockUpdate(ctx context.Context, seed []byte) error {
 		}
 		seedPtr := uint32(results[0])
 		w.mod.Memory().Write(seedPtr, seed)
-		_, err = w.fnBlockUpdate.Call(ctx, uint64(seedPtr), uint64(len(seed)))
+		_, err = w.fnBlockUpdate.Call(ctx, uint64(seedPtr))
 		return err
 	}
-	_, err := w.fnBlockUpdate.Call(ctx, 0, 0)
+	_, err := w.fnBlockUpdate.Call(ctx, 0)
 	return err
 }
 
@@ -263,6 +268,7 @@ func (w *wasmInstance) callQuery(ctx context.Context) ([]byte, error) {
 // ---------------------------------------------------------------------------
 
 func hostKVGet(ctx context.Context, mod api.Module, stack []uint64) {
+	if c := chainFromCtx(ctx); c != nil { c.chargeGas(1000) }
 	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
 	mem := mod.Memory()
 	keyBytes, ok := mem.Read(keyPtr, keyLen)
@@ -292,6 +298,7 @@ func hostKVGet(ctx context.Context, mod api.Module, stack []uint64) {
 }
 
 func hostKVSet(ctx context.Context, mod api.Module, stack []uint64) {
+	if c := chainFromCtx(ctx); c != nil { c.chargeGas(5000) }
 	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
 	valPtr, valLen := uint32(stack[2]), uint32(stack[3])
 	mem := mod.Memory()
@@ -319,6 +326,7 @@ func hostKVSet(ctx context.Context, mod api.Module, stack []uint64) {
 }
 
 func hostKVHas(ctx context.Context, mod api.Module, stack []uint64) {
+	if c := chainFromCtx(ctx); c != nil { c.chargeGas(500) }
 	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
 	keyBytes, _ := mod.Memory().Read(keyPtr, keyLen)
 	if kvStoreFromCtx(ctx).Has(keyBytes) {
@@ -329,6 +337,7 @@ func hostKVHas(ctx context.Context, mod api.Module, stack []uint64) {
 }
 
 func hostKVDelete(ctx context.Context, mod api.Module, stack []uint64) {
+	if c := chainFromCtx(ctx); c != nil { c.chargeGas(1000) }
 	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
 	keyBytes, _ := mod.Memory().Read(keyPtr, keyLen)
 
@@ -355,6 +364,7 @@ func hostReserve(ctx context.Context, _ api.Module, stack []uint64) {
 		stack[0] = 1
 		return
 	}
+	c.chargeGas(10000)
 	if err := c.reserveLocked(stack[0], stack[1]); err != nil {
 		stack[0] = 1
 		return
@@ -368,6 +378,7 @@ func hostSettle(ctx context.Context, _ api.Module, stack []uint64) {
 		stack[0] = 1
 		return
 	}
+	c.chargeGas(10000)
 	if err := c.settleLocked(stack[0], stack[1], uint8(stack[2])); err != nil {
 		stack[0] = 1
 		return
@@ -381,6 +392,7 @@ func hostIncreaseStake(ctx context.Context, _ api.Module, stack []uint64) {
 		stack[0] = 1
 		return
 	}
+	c.chargeGas(10000)
 	if err := c.increaseStakeLocked(stack[0], stack[1]); err != nil {
 		stack[0] = 1
 		return
@@ -389,6 +401,7 @@ func hostIncreaseStake(ctx context.Context, _ api.Module, stack []uint64) {
 }
 
 func hostGetBet(ctx context.Context, mod api.Module, stack []uint64) {
+	if c := chainFromCtx(ctx); c != nil { c.chargeGas(500) }
 	// Not implemented in simulator — returns 0.
 	stack[0] = 0
 }
@@ -399,6 +412,7 @@ func hostGetPendingAction(ctx context.Context, mod api.Module, stack []uint64) {
 		stack[0] = 0
 		return
 	}
+	c.chargeGas(500)
 	data := c.getPendingActionLocked(stack[0])
 	if data == nil {
 		stack[0] = 0
@@ -418,6 +432,7 @@ func hostGetBettor(ctx context.Context, mod api.Module, stack []uint64) {
 		stack[0] = 0
 		return
 	}
+	c.chargeGas(500)
 	addr := c.getBettorLocked(stack[0])
 	if addr == "" {
 		stack[0] = 0
@@ -437,8 +452,54 @@ func hostEmitEvent(ctx context.Context, mod api.Module, stack []uint64) {
 	if c == nil {
 		return
 	}
+	c.chargeGas(500)
 	mem := mod.Memory()
 	topicBytes, _ := mem.Read(uint32(stack[0]), uint32(stack[1]))
 	dataBytes, _ := mem.Read(uint32(stack[2]), uint32(stack[3]))
 	c.emitCalcEventLocked(string(topicBytes), string(dataBytes))
+}
+
+// toMutableGlobal casts an api.Global to api.MutableGlobal, returning nil if not mutable.
+func toMutableGlobal(g api.Global) api.MutableGlobal {
+	if g == nil {
+		return nil
+	}
+	mg, ok := g.(api.MutableGlobal)
+	if !ok {
+		return nil
+	}
+	return mg
+}
+
+// chargeGas writes host-function gas cost directly into the WASM gas_used global.
+// Unified counter: WASM instructions + host charges in one place.
+// No-op if calculator is killed.
+func (c *Chain) chargeGas(cost uint64) {
+	calc, ok := c.calculators[c.activeCalcID]
+	if !ok || calc.Status != CalcStatusActive {
+		return
+	}
+	game, ok := c.games[c.activeCalcID]
+	if !ok || game.inst == nil || game.inst.gasGlobal == nil {
+		return
+	}
+	game.inst.gasGlobal.Set(game.inst.gasGlobal.Get() + cost)
+}
+
+func hostGetGasBudget(ctx context.Context, _ api.Module, stack []uint64) {
+	c := chainFromCtx(ctx)
+	if c == nil {
+		stack[0] = 0
+		return
+	}
+	stack[0] = c.currentGasBudget
+}
+
+func hostGetGasUsed(ctx context.Context, _ api.Module, stack []uint64) {
+	c := chainFromCtx(ctx)
+	if c == nil {
+		stack[0] = 0
+		return
+	}
+	stack[0] = c.totalGasUsed(c.activeCalcID)
 }

@@ -100,7 +100,9 @@ func (c *Chain) killCalculatorLocked(calcID uint64, reason string) error {
 // refundOpenBetsLocked settles all open bets as refunds. Caller must hold c.mu.
 func (c *Chain) refundOpenBetsLocked(calcID uint64) {
 	savedMode := c.mode
+	savedCalcID := c.activeCalcID
 	c.mode = CalcModeBlockUpdate
+	c.activeCalcID = calcID // ownership check in settleLocked needs this
 
 	for betID, bet := range c.bets {
 		if bet.CalculatorID != calcID || bet.Status != BetOpen {
@@ -110,4 +112,5 @@ func (c *Chain) refundOpenBetsLocked(calcID uint64) {
 	}
 
 	c.mode = savedMode
+	c.activeCalcID = savedCalcID
 }

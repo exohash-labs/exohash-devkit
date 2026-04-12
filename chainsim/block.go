@@ -31,14 +31,37 @@ func (c *Chain) AdvanceBlock() BlockResult {
 		BeaconSeed: seed,
 	}
 
-	// Call block_update(seed) for every registered game — v2 protocol.
+	// Call block_update(seed) for every registered game.
 	c.mode = CalcModeBlockUpdate
 	for calcID, game := range c.games {
+		// Skip killed calculators.
+		if calc, ok := c.calculators[calcID]; ok && calc.Status != CalcStatusActive {
+			continue
+		}
+
 		c.activeCalcID = calcID
 		ctx, _, _ := c.wasmCtxForGame(calcID)
+		budget := c.computeGasBudget(calcID)
+		c.currentGasBudget = budget
+
+		// Snapshot WASM gas before call.
+		var gasBefore uint64
+		if game.inst.gasGlobal != nil {
+			gasBefore = game.inst.gasGlobal.Get()
+		}
+		c.lastWasmGas = gasBefore
+
 		if err := game.inst.callBlockUpdate(ctx, seed[:]); err != nil {
 			fmt.Printf("block_update error (calc=%d, h=%d): %v\n", calcID, c.height, err)
 		}
+
+		// Deduct gas from balance. Kill if over budget or balance exhausted.
+		used := c.totalGasUsed(calcID)
+		c.currentGasBudget = 0 // clear so WASM can't read stale budget
+		if used > budget || !c.deductGas(calcID, used) {
+			_ = c.killCalculatorLocked(calcID, "gas_budget_exceeded")
+		}
+
 		c.reinstantiateIfNeeded(calcID)
 	}
 

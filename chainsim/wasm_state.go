@@ -119,6 +119,10 @@ func (c *Chain) getPendingActionLocked(betID uint64) []byte {
 	if c.mode != CalcModeBlockUpdate {
 		return nil
 	}
+	bet, ok := c.bets[betID]
+	if !ok || bet.CalculatorID != c.activeCalcID {
+		return nil
+	}
 	action, ok := c.pendingActions[betID]
 	if ok {
 		delete(c.pendingActions, betID)
@@ -140,6 +144,9 @@ func (c *Chain) GetBettor(betID uint64) string {
 func (c *Chain) getBettorLocked(betID uint64) string {
 	bet, ok := c.bets[betID]
 	if !ok {
+		return ""
+	}
+	if bet.CalculatorID != c.activeCalcID {
 		return ""
 	}
 	return bet.Bettor

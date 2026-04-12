@@ -43,6 +43,7 @@ func host_get_bettor(betID uint64, outPtr uint32) uint32
 //go:wasmimport env emit_event
 func host_emit_event(topicPtr, topicLen, dataPtr, dataLen uint32)
 
+
 // ---------------------------------------------------------------------------
 // Memory
 // ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ const (
 	statusSettled    byte = 2
 
 	cfgSize   = 48
-	roundSize = 33
+	roundSize = 57 // extended with running counters to avoid O(N) countActive per tick
 	betSize   = 18
 
 	maxHistory     = 20
@@ -92,12 +93,15 @@ const (
 //   [32..39] join_window_blocks
 //   [40..47] crashed_cooldown_blocks
 //
-// Round layout (33 bytes):
+// Round layout (57 bytes):
 //   [0..7]   current_mult (bp)
 //   [8..15]  ticks_elapsed
 //   [16..23] blocks_in_phase (countdown for open/crashed, tick count for tick)
 //   [24]     phase
-//   [25..32] bet_count
+//   [25..32] bet_count (total joined this round)
+//   [33..40] active_count (not yet settled)
+//   [41..48] cashed_count (settled as win/cashout)
+//   [49..56] total_stake (sum of active bet stakes)
 
 var (
 	keyCfg     = []byte("cfg")
@@ -107,12 +111,24 @@ var (
 	keyCashout = []byte("co") // pending cashout bet IDs
 )
 
+// betKeyBuf is reused across calls to avoid heap allocation per betKey.
+// Safe in single-threaded WASM — no concurrent access.
+var betKeyBuf [9]byte
+
 func betKey(id uint64) []byte {
-	buf := make([]byte, 9)
-	buf[0] = 'b'
-	binary.LittleEndian.PutUint64(buf[1:], id)
-	return buf
+	betKeyBuf[0] = 'b'
+	binary.LittleEndian.PutUint64(betKeyBuf[1:], id)
+	return betKeyBuf[:]
 }
+
+// Round counter accessors — read/write running counters in round state.
+func roundActiveCount(r []byte) uint64  { return binary.LittleEndian.Uint64(r[33:41]) }
+func roundCashedCount(r []byte) uint64  { return binary.LittleEndian.Uint64(r[41:49]) }
+func roundTotalStake(r []byte) uint64   { return binary.LittleEndian.Uint64(r[49:57]) }
+
+func setRoundActiveCount(r []byte, v uint64) { binary.LittleEndian.PutUint64(r[33:41], v) }
+func setRoundCashedCount(r []byte, v uint64) { binary.LittleEndian.PutUint64(r[41:49], v) }
+func setRoundTotalStake(r []byte, v uint64)  { binary.LittleEndian.PutUint64(r[49:57], v) }
 
 // ---------------------------------------------------------------------------
 // init_game
@@ -162,6 +178,8 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 	count := binary.LittleEndian.Uint64(round[25:33])
 	count++
 	binary.LittleEndian.PutUint64(round[25:], count)
+	setRoundActiveCount(round, roundActiveCount(round)+1)
+	setRoundTotalStake(round, roundTotalStake(round)+stake)
 	kvSet(keyRound, round)
 
 	maxMult := binary.LittleEndian.Uint64(cfg[16:24])
@@ -200,7 +218,7 @@ func bet_action(betID uint64, actionPtr, actionLen uint32) uint32 {
 // ---------------------------------------------------------------------------
 
 //export block_update
-func block_update(seedPtr, seedLen uint32) {
+func block_update(seedPtr uint32) {
 	round := kvGetRound()
 	if round == nil {
 		return
@@ -209,10 +227,10 @@ func block_update(seedPtr, seedLen uint32) {
 	case phaseOpen:
 		handleOpen(round)
 	case phaseTick:
-		if seedLen == 0 {
+		if seedPtr == 0 {
 			return // no RNG — skip tick
 		}
-		seed := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), seedLen)
+		seed := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(seedPtr))), 32)
 		handleTick(round, seed)
 	case phaseCrashed:
 		handleCrashed(round)
@@ -233,14 +251,15 @@ func handleOpen(round []byte) {
 	}
 
 	count := binary.LittleEndian.Uint64(round[25:33])
-	_, _, totalStake := countActive()
+	active := roundActiveCount(round)
+	totalStake := roundTotalStake(round)
 	rn := getRoundNumber()
 
 	if blocksIn > 1 {
 		blocksIn--
 		binary.LittleEndian.PutUint64(round[16:], blocksIn)
 		kvSet(keyRound, round)
-		emitState("open", rn, 10000, 0, blocksIn, count, count, 0, totalStake)
+		emitState("open", rn, 10000, 0, blocksIn, count, active, 0, totalStake)
 		return
 	}
 
@@ -248,7 +267,7 @@ func handleOpen(round []byte) {
 	round[24] = phaseTick
 	binary.LittleEndian.PutUint64(round[16:], 0) // reset counter
 	kvSet(keyRound, round)
-	emitState("tick", rn, 10000, 0, 0, count, count, 0, totalStake)
+	emitState("tick", rn, 10000, 0, 0, count, active, 0, totalStake)
 }
 
 // ---------------------------------------------------------------------------
@@ -300,7 +319,7 @@ func handleTick(round []byte, seed []byte) {
 		return
 	}
 
-	// Settle cashouts as wins.
+	// Settle cashouts as wins — update running counters per cashout.
 	for _, bid := range cashoutIDs {
 		bet := kvGetBytes(betKey(bid))
 		if bet == nil || bet[16] == statusSettled {
@@ -311,6 +330,20 @@ func handleTick(round []byte, seed []byte) {
 		bet[16] = statusSettled
 		kvSet(betKey(bid), bet)
 		host_settle(bid, payout, kindWin)
+
+		// Update running counters.
+		ac := roundActiveCount(round)
+		if ac > 0 {
+			setRoundActiveCount(round, ac-1)
+		}
+		setRoundCashedCount(round, roundCashedCount(round)+1)
+		ts := roundTotalStake(round)
+		if stake <= ts {
+			setRoundTotalStake(round, ts-stake)
+		} else {
+			setRoundTotalStake(round, 0)
+		}
+
 		addr := getBettorAddr(bid)
 		emitJSON("cashout", "bet_id", bid, "addr", addr, "mult_bp", nextMult, "payout", payout)
 	}
@@ -336,9 +369,8 @@ func handleTick(round []byte, seed []byte) {
 	binary.LittleEndian.PutUint64(round[8:], ticksElapsed+1)
 	kvSet(keyRound, round)
 
-	active, cashed, totalStake := countActive()
 	count := binary.LittleEndian.Uint64(round[25:33])
-	emitState("tick", rn, nextMult, ticksElapsed+1, 0, count, active, cashed, totalStake)
+	emitState("tick", rn, nextMult, ticksElapsed+1, 0, count, roundActiveCount(round), roundCashedCount(round), roundTotalStake(round))
 }
 
 // ---------------------------------------------------------------------------
@@ -358,8 +390,7 @@ func enterCrashed(round []byte, rn, crashMult, finalTick uint64) {
 	kvSet(keyRound, round)
 
 	count := binary.LittleEndian.Uint64(round[25:33])
-	_, cashed, totalStake := countActive()
-	emitState("crashed", rn, crashMult, finalTick, cooldown, count, 0, cashed, totalStake)
+	emitState("crashed", rn, crashMult, finalTick, cooldown, count, 0, roundCashedCount(round), roundTotalStake(round))
 }
 
 func handleCrashed(round []byte) {
@@ -419,6 +450,8 @@ func settleAllAsLoss(round []byte) {
 		addr := getBettorAddr(bid)
 		emitJSON("settled", "bet_id", bid, "addr", addr, "payout", uint64(0), "kind", uint64(kindLoss))
 	}
+	setRoundActiveCount(round, 0)
+	setRoundTotalStake(round, 0)
 }
 
 func settleRemainingAsWin(round []byte, multBP uint64) {
@@ -436,6 +469,10 @@ func settleRemainingAsWin(round []byte, multBP uint64) {
 		addr := getBettorAddr(bid)
 		emitJSON("settled", "bet_id", bid, "addr", addr, "payout", payout, "kind", uint64(kindWin))
 	}
+	ac := roundActiveCount(round)
+	setRoundCashedCount(round, roundCashedCount(round)+ac)
+	setRoundActiveCount(round, 0)
+	setRoundTotalStake(round, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -455,25 +492,6 @@ func getRoundNumber() uint64 {
 		return binary.LittleEndian.Uint64(rnBuf)
 	}
 	return 1
-}
-
-func countActive() (active, cashed, totalStake uint64) {
-	betIDs := loadBetIDs()
-	for _, bid := range betIDs {
-		bet := kvGetBytes(betKey(bid))
-		if bet == nil || len(bet) < betSize {
-			continue
-		}
-		stake := binary.LittleEndian.Uint64(bet[8:16])
-		totalStake += stake
-		switch bet[16] {
-		case statusActive, statusCashoutReq:
-			active++
-		case statusSettled:
-			cashed++
-		}
-	}
-	return
 }
 
 func getBettorAddr(betID uint64) string {

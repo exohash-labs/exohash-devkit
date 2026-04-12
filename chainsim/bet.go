@@ -46,7 +46,24 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 		fullParams := append(senderBytes, params...)
 
 		ctx, _, _ := c.wasmCtxForGame(calcID)
+		c.currentGasBudget = GasMaxPerBlock
+
+		// Snapshot WASM gas before call.
+		var gasBefore uint64
+		if game.inst.gasGlobal != nil {
+			gasBefore = game.inst.gasGlobal.Get()
+		}
+		c.lastWasmGas = gasBefore
+
 		status, err := game.inst.callPlaceBet(ctx, betID, bankrollID, calcID, stake, fullParams)
+
+		// Deduct gas from balance. Kill if over per-call cap or balance exhausted.
+		used := c.totalGasUsed(calcID)
+		if !c.deductGas(calcID, used) {
+			_ = c.killCalculatorLocked(calcID, "gas_balance_exhausted")
+			return 0, fmt.Errorf("place_bet: gas balance exhausted (used %d)", used)
+		}
+
 		c.reinstantiateIfNeeded(calcID)
 		if err != nil || status != 0 {
 			// WASM rejected — refund.
@@ -57,6 +74,9 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 			}
 			return 0, fmt.Errorf("place_bet rejected (status=%d)", status)
 		}
+
+		// Credit gas for successful bet.
+		c.creditGas(calcID, GasCreditPerBet)
 	}
 
 	return betID, nil
@@ -85,7 +105,24 @@ func (c *Chain) BetAction(addr string, betID uint64, action []byte) error {
 
 	c.activeCalcID = bet.CalculatorID
 	ctx, _, _ := c.wasmCtxForGame(bet.CalculatorID)
+	c.currentGasBudget = GasMaxPerBlock
+
+	// Snapshot WASM gas before call.
+	var gasBefore uint64
+	if game.inst.gasGlobal != nil {
+		gasBefore = game.inst.gasGlobal.Get()
+	}
+	c.lastWasmGas = gasBefore
+
 	status, err := game.inst.callBetAction(ctx, betID, action)
+
+	// Deduct gas from balance. Kill if over per-call cap or balance exhausted.
+	used := c.totalGasUsed(bet.CalculatorID)
+	if !c.deductGas(bet.CalculatorID, used) {
+		_ = c.killCalculatorLocked(bet.CalculatorID, "gas_balance_exhausted")
+		return fmt.Errorf("bet_action: gas balance exhausted (used %d)", used)
+	}
+
 	c.reinstantiateIfNeeded(bet.CalculatorID)
 	if err != nil {
 		return fmt.Errorf("bet_action: %w", err)
@@ -181,6 +218,9 @@ func (c *Chain) reserveLocked(betID, maxPayout uint64) error {
 	if !ok {
 		return fmt.Errorf("bet %d not found", betID)
 	}
+	if bet.CalculatorID != c.activeCalcID {
+		return fmt.Errorf("bet %d belongs to calculator %d, not %d", betID, bet.CalculatorID, c.activeCalcID)
+	}
 
 	br, ok := c.bankrolls[bet.BankrollID]
 	if !ok {
@@ -228,6 +268,9 @@ func (c *Chain) settleLocked(betID, payout uint64, kind uint8) error {
 	bet, ok := c.bets[betID]
 	if !ok {
 		return fmt.Errorf("bet %d not found", betID)
+	}
+	if bet.CalculatorID != c.activeCalcID {
+		return fmt.Errorf("bet %d belongs to calculator %d, not %d", betID, bet.CalculatorID, c.activeCalcID)
 	}
 	if bet.Status != BetOpen {
 		return nil // idempotent
@@ -292,9 +335,21 @@ func (c *Chain) settleLocked(betID, payout uint64, kind uint8) error {
 	switch kind {
 	case SettleKindRefund:
 		bet.Status = BetRefunded
-		c.TotalValFees -= bet.ValFee
-		c.TotalProtoFees -= bet.ProtoFee
-		br.Balance -= bet.NetStake
+		if c.TotalValFees >= bet.ValFee {
+			c.TotalValFees -= bet.ValFee
+		} else {
+			c.TotalValFees = 0
+		}
+		if c.TotalProtoFees >= bet.ProtoFee {
+			c.TotalProtoFees -= bet.ProtoFee
+		} else {
+			c.TotalProtoFees = 0
+		}
+		if br.Balance >= bet.NetStake {
+			br.Balance -= bet.NetStake
+		} else {
+			br.Balance = 0
+		}
 		acc := c.accounts[bet.Bettor]
 		if acc != nil {
 			acc.Balance += bet.Stake
@@ -315,6 +370,9 @@ func (c *Chain) increaseStakeLocked(betID, additional uint64) error {
 	bet, ok := c.bets[betID]
 	if !ok {
 		return fmt.Errorf("bet %d not found", betID)
+	}
+	if bet.CalculatorID != c.activeCalcID {
+		return fmt.Errorf("bet %d belongs to calculator %d, not %d", betID, bet.CalculatorID, c.activeCalcID)
 	}
 
 	acc, ok := c.accounts[bet.Bettor]

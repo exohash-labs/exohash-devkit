@@ -23,6 +23,13 @@ const (
 	CalcModeInitGame    CalcMode = 4 // Kickstart — one-time game setup
 )
 
+// Gas budget constants.
+const (
+	GasInitialCredits uint64 = 1_000_000_000 // 1B gas on calculator deploy
+	GasCreditPerBet   uint64 = 1_000_000     // 1M gas per successful place_bet
+	GasMaxPerBlock    uint64 = 10_000_000    // 10M hard cap per block_update call
+)
+
 // CalcEvent is a WASM calculator event (topic + JSON data).
 // Mirrors SDK EventTypeCalcEvent emitted via host_emit_event.
 type CalcEvent struct {
@@ -89,6 +96,12 @@ type Chain struct {
 	// KV storage usage per calculator (bytes).
 	kvUsage map[uint64]uint64
 
+	// Gas metering — single counter in the WASM gas_used global.
+	// chargeGas writes host costs directly into the WASM global.
+	lastWasmGas      uint64            // gas_used global snapshot before last call
+	gasBalance       map[uint64]uint64 // calcID → remaining gas credits
+	currentGasBudget uint64            // budget for current WASM call (read by host fn)
+
 	// WASM runtime + registered games.
 	wasmRT wazero.Runtime
 	games  map[uint64]*gameState
@@ -129,6 +142,7 @@ func NewWithParams(params Params, seed uint64) *Chain {
 		wakeups:        make(map[uint64][]uint64),
 		pendingActions: make(map[uint64][]byte),
 		kvUsage:        make(map[uint64]uint64),
+		gasBalance:     make(map[uint64]uint64),
 		nextBankrollID: 1,
 		nextBetID:      1,
 		seed:           seed,
@@ -168,6 +182,24 @@ func (c *Chain) KVUsage(calcID uint64) uint64 {
 	return c.kvUsage[calcID]
 }
 
+// GasBalance returns the remaining gas credits for a calculator.
+func (c *Chain) GasBalance(calcID uint64) uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.gasBalance[calcID]
+}
+
+// WasmGasUsed returns total accumulated gas for a game (WASM + host unified).
+func (c *Chain) WasmGasUsed(calcID uint64) uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	game, ok := c.games[calcID]
+	if !ok || game.inst == nil || game.inst.gasGlobal == nil {
+		return 0
+	}
+	return game.inst.gasGlobal.Get()
+}
+
 // WasmMemorySize returns the current WASM linear memory size in bytes for a game.
 func (c *Chain) WasmMemorySize(calcID uint64) uint32 {
 	c.mu.RLock()
@@ -177,6 +209,53 @@ func (c *Chain) WasmMemorySize(calcID uint64) uint32 {
 		return 0
 	}
 	return game.inst.mod.Memory().Size()
+}
+
+// computeGasBudget returns the block_update gas budget for a calculator.
+// Capped by both GasMaxPerBlock and the remaining gas balance.
+func (c *Chain) computeGasBudget(calcID uint64) uint64 {
+	bal := c.gasBalance[calcID]
+	if bal > GasMaxPerBlock {
+		return GasMaxPerBlock
+	}
+	return bal
+}
+
+// deductGas subtracts used gas from the calculator's balance.
+// Returns false if balance insufficient (calculator should be killed).
+func (c *Chain) deductGas(calcID, used uint64) bool {
+	bal := c.gasBalance[calcID]
+	if used > bal {
+		c.gasBalance[calcID] = 0
+		return false
+	}
+	c.gasBalance[calcID] = bal - used
+	return true
+}
+
+// creditGas adds gas credits to a calculator's balance (saturating).
+func (c *Chain) creditGas(calcID, amount uint64) {
+	bal := c.gasBalance[calcID]
+	if bal > ^uint64(0)-amount {
+		c.gasBalance[calcID] = ^uint64(0) // saturate
+	} else {
+		c.gasBalance[calcID] = bal + amount
+	}
+}
+
+// totalGasUsed returns the gas delta for the current call (WASM + host unified).
+// Returns 0 on underflow (instance recycled mid-call).
+// Caller must hold c.mu.
+func (c *Chain) totalGasUsed(calcID uint64) uint64 {
+	game, ok := c.games[calcID]
+	if !ok || game.inst == nil || game.inst.gasGlobal == nil {
+		return 0
+	}
+	current := game.inst.gasGlobal.Get()
+	if current < c.lastWasmGas {
+		return 0
+	}
+	return current - c.lastWasmGas
 }
 
 func sharesKey(bankrollID uint64, addr string) string {
