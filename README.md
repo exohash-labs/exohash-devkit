@@ -53,6 +53,7 @@ demo/                  Next.js demo app with all 3 games
 cmd/mock-bff/          Local HTTP/SSE dev server
 cmd/bot-runner/        Bot runner process
 wasm/                  Pre-compiled game binaries
+tests/                 Game simulation suite (go run ./tests/dice, ./tests/mines, ./tests/crash)
 config.yaml            Mock BFF config (games, bankroll, faucet)
 bots.yaml              Bot config (strategies, frequencies)
 ```
