@@ -23,6 +23,7 @@ export function useStream(
     const stream = new ExoStream({
       baseUrl: bffUrl,
       games,
+      address: address ?? undefined,
       onEvent: handleEvent,
       onStatus: setConnected,
     });

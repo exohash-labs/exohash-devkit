@@ -9,15 +9,22 @@ export interface StreamEvent {
   betsCreated?: BetCreated[];
   betsSettled?: BetSettled[];
   calcEvents?: CalcEvent[];
+  systemEvents?: SystemEvent[];
   // Control events
   connected?: boolean;
   replay?: boolean;
   heartbeat?: boolean;
 }
 
+export interface SystemEvent {
+  type: string;
+  data: Record<string, string>;
+}
+
 export interface BetCreated {
   betId: number;
   bankrollId: number;
+  calculatorId: number;
   bettor: string;
   stake: string;
   denom: string;
@@ -27,8 +34,11 @@ export interface BetSettled {
   betId: number;
   gameId: number;
   bankrollId: number;
+  bettor: string;
   payout: string;
   payoutKind: number; // 1=win, 2=loss, 3=refund
+  netStake: string;
+  profit: string;
   height: number;
 }
 
