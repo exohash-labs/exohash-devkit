@@ -91,7 +91,7 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 		return 2
 	}
 
-	maxPayout := stake * fairMultBP(chance) / 10000
+	maxPayout := mulDiv(stake, fairMultBP(chance), 10000)
 	if host_reserve(betID, maxPayout) != 0 {
 		return 3
 	}
@@ -170,7 +170,7 @@ func settleBet(betID uint64, seed []byte) {
 	payout := uint64(0)
 	settleKind := uint32(kindLoss)
 	if win {
-		payout = stake * mult / 10000
+		payout = mulDiv(stake, mult, 10000)
 		settleKind = uint32(kindWin)
 	}
 
@@ -450,6 +450,44 @@ func sha256sum(data []byte) [32]byte {
 
 func rightRotate(x uint32, n uint) uint32 {
 	return (x >> n) | (x << (32 - n))
+}
+
+// ---------------------------------------------------------------------------
+// Safe 128-bit multiply-divide (matches mines/crash)
+// ---------------------------------------------------------------------------
+
+func mulDiv(a, b, c uint64) uint64 {
+	if c == 0 {
+		return 0
+	}
+	hi, lo := mul64(a, b)
+	if hi == 0 {
+		return lo / c
+	}
+	return div128(hi, lo, c)
+}
+
+func mul64(a, b uint64) (uint64, uint64) {
+	aH, aL := a>>32, a&0xFFFFFFFF
+	bH, bL := b>>32, b&0xFFFFFFFF
+	lo := aL * bL
+	mid := aH*bL + aL*bH
+	hi := aH * bH
+	lo2 := lo + (mid << 32)
+	if lo2 < lo {
+		hi++
+	}
+	hi += mid >> 32
+	return hi, lo2
+}
+
+func div128(hi, lo, d uint64) uint64 {
+	if d == 0 {
+		return 0
+	}
+	q := hi / d
+	r := hi % d
+	return (q << 32) + (((r << 32) | (lo >> 32)) / d)
 }
 
 func main() {}

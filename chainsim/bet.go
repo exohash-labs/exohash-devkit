@@ -390,6 +390,18 @@ func (c *Chain) increaseStakeLocked(betID, additional uint64) error {
 		if !ok {
 			return fmt.Errorf("bankroll %d not found", bet.BankrollID)
 		}
+
+		// Enforce MaxReservedBps cap (matches real chain's Reserve()).
+		resBps := br.MaxReservedBps
+		if resBps == 0 {
+			resBps = DefaultMaxReservedBps
+		}
+		resLimit := bpsOf(br.Balance, resBps)
+		if br.TotalReserved+additionalReserved > resLimit {
+			return fmt.Errorf("increase_stake: total reserved %d + %d exceeds %d bps limit %d",
+				br.TotalReserved, additionalReserved, resBps, resLimit)
+		}
+
 		br.TotalReserved += additionalReserved
 		bet.Reserved += additionalReserved
 	}
@@ -452,6 +464,40 @@ func (c *Chain) GetBet(betID uint64) *Bet {
 	}
 	cp := *bet
 	return &cp
+}
+
+// PurgeSettledBets removes all settled/refunded bets from in-memory maps.
+// Open bets are preserved. Returns the number of bets purged.
+func (c *Chain) PurgeSettledBets() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	purged := 0
+	for id, bet := range c.bets {
+		if bet.Status == BetOpen {
+			continue
+		}
+		delete(c.bets, id)
+		delete(c.betGame, id)
+		purged++
+	}
+
+	// Rebuild betsByAddr with only surviving (open) bets.
+	for addr, ids := range c.betsByAddr {
+		kept := ids[:0]
+		for _, id := range ids {
+			if _, ok := c.bets[id]; ok {
+				kept = append(kept, id)
+			}
+		}
+		if len(kept) == 0 {
+			delete(c.betsByAddr, addr)
+		} else {
+			c.betsByAddr[addr] = kept
+		}
+	}
+
+	return purged
 }
 
 // BetHistory returns recent bets for an address.
