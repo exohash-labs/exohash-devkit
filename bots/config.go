@@ -44,7 +44,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	if cfg.BffURL == "" {
-		cfg.BffURL = "http://localhost:4000"
+		cfg.BffURL = "http://localhost:4000" // bffsim default; real chain's BFF is :3100
 	}
 	return &cfg, nil
 }

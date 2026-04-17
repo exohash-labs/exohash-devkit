@@ -29,6 +29,12 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Circuit breaker: no bets accepted while beacon is down.
+	// Mirrors msg_server_place_bet.go BeaconLiveForBets gate.
+	if c.beaconDown {
+		return 0, ErrBeaconUnavailable
+	}
+
 	c.mode = CalcModePlaceBet
 
 	betID := c.nextBetID
@@ -46,7 +52,7 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 		fullParams := append(senderBytes, params...)
 
 		ctx, _, _ := c.wasmCtxForGame(calcID)
-		c.currentGasBudget = GasMaxPerBlock
+		c.currentGasBudget = c.params.GasMaxPerBlock
 
 		// Snapshot WASM gas before call.
 		var gasBefore uint64
@@ -76,7 +82,7 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 		}
 
 		// Credit gas for successful bet.
-		c.creditGas(calcID, GasCreditPerBet)
+		c.creditGas(calcID, c.params.GasCreditPerBet)
 	}
 
 	return betID, nil
@@ -87,6 +93,12 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 func (c *Chain) BetAction(addr string, betID uint64, action []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Circuit breaker: no actions accepted while beacon is down.
+	// Mirrors msg_server_bet_action.go BeaconLiveForBets gate.
+	if c.beaconDown {
+		return ErrBeaconUnavailable
+	}
 
 	c.mode = CalcModeBetAction
 
@@ -105,7 +117,7 @@ func (c *Chain) BetAction(addr string, betID uint64, action []byte) error {
 
 	c.activeCalcID = bet.CalculatorID
 	ctx, _, _ := c.wasmCtxForGame(bet.CalculatorID)
-	c.currentGasBudget = GasMaxPerBlock
+	c.currentGasBudget = c.params.GasMaxPerBlock
 
 	// Snapshot WASM gas before call.
 	var gasBefore uint64
@@ -195,9 +207,9 @@ func (c *Chain) placeBetLocked(betID uint64, addr string, bankrollID, calcID, st
 	c.emit("bet_created",
 		"bet_id", u64(betID),
 		"bankroll_id", u64(bankrollID),
+		"game_id", u64(calcID),
 		"bettor", addr,
 		"stake", u64(stake),
-		"calculator_id", u64(calcID),
 	)
 
 	return nil
@@ -310,20 +322,35 @@ func (c *Chain) settleLocked(betID, payout uint64, kind uint8) error {
 		acc.Balance += payout
 	}
 
-	// Emit settlement event.
-	payoutKind := "loss"
+	// Emit bet_settled — attribute set mirrors x/house/keeper/host_callbacks.go
+	// emitBetSettled so indexers have the same fields either way.
+	denom := "uusdc"
+	var profit int64 = int64(bet.NetStake) - int64(payout)
+	payoutKindNum := "2" // loss
 	if payout > 0 {
-		payoutKind = "win"
+		payoutKindNum = "1" // win
 	}
 	if kind == SettleKindRefund {
-		payoutKind = "refund"
+		payoutKindNum = "3"
 	}
 	c.emit("bet_settled",
 		"bet_id", u64(betID),
 		"bankroll_id", u64(bet.BankrollID),
-		"payout", u64(payout),
-		"payout_kind", payoutKind,
-		"net_stake", u64(bet.NetStake),
+		"game_id", u64(bet.CalculatorID),
+		"bettor", bet.Bettor,
+		"height", u64(c.height),
+		"stake", fmt.Sprintf("%d%s", bet.Stake, denom),
+		"stake_amount", u64(bet.Stake),
+		"stake_denom", denom,
+		"net_stake", fmt.Sprintf("%d%s", bet.NetStake, denom),
+		"net_stake_amount", u64(bet.NetStake),
+		"net_stake_denom", denom,
+		"profit_amount", fmt.Sprintf("%d", profit),
+		"profit_denom", denom,
+		"payout", fmt.Sprintf("%d%s", payout, denom),
+		"payout_amount", u64(payout),
+		"payout_denom", denom,
+		"payout_kind", payoutKindNum,
 	)
 
 	// Record settlement for drain.

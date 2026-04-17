@@ -98,27 +98,27 @@ func TestSolvencyReject(t *testing.T) {
 	c := New()
 
 	c.RegisterCalculator(Calculator{ID: 1, Name: "dice", Engine: "dice", HouseEdgeBp: 200})
-	c.Deposit("lp1", 100_000) // tiny bankroll
-	brID, _ := c.CreateBankroll("lp1", 100_000, "Tiny", false)
+	c.Deposit("lp1", 10_000_000) // tiny bankroll
+	brID, _ := c.CreateBankroll("lp1", 10_000_000, "Tiny", false)
 	c.AttachGame(brID, 1)
 	c.Deposit("player1", 1_000_000_000)
 
-	// Place bet — should succeed.
-	betID, err := c.PlaceBet("player1", brID, 1, 1_000, nil)
+	// Place bet — should succeed. Stake must clear MinStakeUusdc (100_000).
+	betID, err := c.PlaceBet("player1", brID, 1, 100_000, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Reserve more than MaxPayoutCapBps allows (2% of 100K = 2K).
+	// Reserve more than MaxPayoutCapBps allows (2% of 10M = 200K).
 	c.SetMode(CalcModePlaceBet)
-	err = c.Reserve(betID, 3_000)
+	err = c.Reserve(betID, 300_000)
 	if err == nil {
 		t.Fatal("expected reserve to fail — exceeds MaxPayoutCapBps")
 	}
 	t.Logf("Correctly rejected: %v", err)
 
 	// Reserve within limits.
-	err = c.Reserve(betID, 1_500)
+	err = c.Reserve(betID, 150_000)
 	if err != nil {
 		t.Fatalf("expected reserve to succeed: %v", err)
 	}

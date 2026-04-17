@@ -31,6 +31,7 @@ func (r *Runner) FundBots() {
 }
 
 // ProcessEvent feeds an SSE event to all bots and executes their actions.
+// HTTP calls (PlaceBet, BetAction) run concurrently — no bot blocks another.
 func (r *Runner) ProcessEvent(ev StreamEvent) {
 	// Feed game-specific calc events.
 	for _, ce := range ev.CalcEvents {
@@ -53,19 +54,21 @@ func (r *Runner) ProcessEvent(ev StreamEvent) {
 func (r *Runner) execute(bot Bot, action Action) {
 	switch action.Type {
 	case DoPlaceBet:
-		betID, err := r.client.PlaceBet(bot.Address(), 1, bot.CalcID(), action.Stake, action.Params)
-		if err != nil {
-			return
-		}
-		log.Printf("BOT %s: placed betID=%d", bot.Address(), betID)
-		bot.SetBetID(betID)
+		go func() {
+			_, err := r.client.PlaceBet(bot.Address(), bot.BankrollID(), bot.CalcID(), action.Stake, action.Params)
+			if err != nil {
+				log.Printf("BOT %s: PlaceBet FAILED calc=%d stake=%d: %v", bot.Address(), bot.CalcID(), action.Stake, err)
+			}
+		}()
 
 	case DoBetAction:
 		if action.BetID == 0 {
 			return
 		}
-		if err := r.client.BetAction(bot.Address(), action.BetID, action.Action); err != nil {
-			log.Printf("BOT %s: action failed for betID=%d: %v", bot.Address(), action.BetID, err)
-		}
+		go func() {
+			if err := r.client.BetAction(bot.Address(), action.BetID, action.Action); err != nil {
+				log.Printf("BOT %s: action failed for betID=%d: %v", bot.Address(), action.BetID, err)
+			}
+		}()
 	}
 }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Stress test: acts as a malicious/chaotic player against mock-bff
+# Stress test: acts as a malicious/chaotic player against bffsim (:4000)
 set -o pipefail
 
 BFF="http://localhost:4000"

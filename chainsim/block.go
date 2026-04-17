@@ -31,6 +31,23 @@ func (c *Chain) AdvanceBlock() BlockResult {
 		BeaconSeed: seed,
 	}
 
+	// Beacon circuit breaker — mirrors keeper/block_update.go ProcessActiveCalculators.
+	// If the beacon has been down longer than AutoRefundBlocks, refund all open bets.
+	// Otherwise, if it's merely down, skip block_update and emit circuit_breaker.
+	if c.beaconDown {
+		downBlocks := int64(c.height - c.beaconDownSince)
+		if c.params.AutoRefundBlocks > 0 && downBlocks > c.params.AutoRefundBlocks {
+			c.autoRefundAllOpen()
+			c.emit("beacon_auto_refund", "height", u64(c.height))
+		} else {
+			c.emit("beacon_circuit_breaker",
+				"status", "paused",
+				"height", u64(c.height),
+			)
+		}
+		return c.drainBlockResult(block)
+	}
+
 	// Call block_update(seed) for every registered game.
 	c.mode = CalcModeBlockUpdate
 	for calcID, game := range c.games {
@@ -65,8 +82,12 @@ func (c *Chain) AdvanceBlock() BlockResult {
 		c.reinstantiateIfNeeded(calcID)
 	}
 
-	// Drain events while still holding the lock — prevents concurrent
-	// PlaceBet/BetAction from stealing block_update events.
+	return c.drainBlockResult(block)
+}
+
+// drainBlockResult snapshots and clears event buffers.
+// Caller must hold c.mu.
+func (c *Chain) drainBlockResult(block Block) BlockResult {
 	calcEvents := make([]CalcEvent, len(c.calcEvents))
 	copy(calcEvents, c.calcEvents)
 	c.calcEvents = c.calcEvents[:0]
@@ -84,6 +105,20 @@ func (c *Chain) AdvanceBlock() BlockResult {
 		CalcEvents:  calcEvents,
 		Settlements: settlements,
 		Events:      chainEvents,
+	}
+}
+
+// autoRefundAllOpen refunds every open bet. Mirrors keeper.RefundOpenBets
+// invoked from block_update.go when the beacon has been down too long.
+// Caller must hold c.mu.
+func (c *Chain) autoRefundAllOpen() {
+	c.mode = CalcModeBlockUpdate
+	for betID, bet := range c.bets {
+		if bet.Status != BetOpen {
+			continue
+		}
+		c.activeCalcID = bet.CalculatorID
+		_ = c.settleLocked(betID, 0, SettleKindRefund)
 	}
 }
 

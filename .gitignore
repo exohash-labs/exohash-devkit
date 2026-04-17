@@ -3,4 +3,24 @@ node_modules/
 dist/
 .next/
 .env.local
-tools/wasm-gas-inject/target/
+
+# stray Go binaries built at repo root
+/bffsim
+/bot-runner
+/dice
+/crash
+/mines
+
+# logs + test artifacts
+*.log
+games/*/results.txt
+*.tsbuildinfo
+ui/test-results/
+
+# start_demo.sh runtime state
+.devkit/
+
+# Go test-runner binaries produced by `go build .` inside games/*
+games/*/dice
+games/*/crash
+games/*/mines

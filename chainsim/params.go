@@ -28,6 +28,23 @@ type Params struct {
 	// Exceeding this kills the calculator and refunds all open bets.
 	// Default: 1_048_576 (1 MB).
 	MaxKVBytesPerCalculator uint64
+
+	// AutoRefundBlocks: if the beacon is unavailable for longer than this many
+	// blocks, all open bets are refunded and block_update is skipped.
+	// Mirrors x/house/types.DefaultAutoRefundBlocks (172800 = 24h at 500ms).
+	AutoRefundBlocks int64
+
+	// GasInitialCredits: gas granted to a calculator at deploy time.
+	// Mirrors x/house/types.DefaultGasInitialCredits (1B).
+	GasInitialCredits uint64
+
+	// GasCreditPerBet: gas credit added on each successful place_bet.
+	// Mirrors x/house/types.DefaultGasCreditPerBet (1M).
+	GasCreditPerBet uint64
+
+	// GasMaxPerBlock: hard cap for WASM gas inside one block_update call.
+	// Mirrors x/house/types.DefaultGasMaxPerBlock (10M).
+	GasMaxPerBlock uint64
 }
 
 // DefaultParams returns the chain defaults.
@@ -40,6 +57,10 @@ func DefaultParams() Params {
 		MinDepositAmount:        10_000_000,  // 10 USDC
 		BankrollCreationFee:     0,
 		MinStakeUusdc:           100_000,     // 0.10 USDC
-		MaxKVBytesPerCalculator: 1_048_576,   // 1 MB
+		MaxKVBytesPerCalculator: 1_048_576,      // 1 MB
+		AutoRefundBlocks:        172800,          // 24h at 500ms blocks
+		GasInitialCredits:       1_000_000_000,   // 1B gas on deploy
+		GasCreditPerBet:         1_000_000,       // 1M gas per successful place_bet
+		GasMaxPerBlock:          10_000_000,      // 10M hard cap per block_update call
 	}
 }

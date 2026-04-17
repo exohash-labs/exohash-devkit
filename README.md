@@ -10,93 +10,116 @@ The result: a decentralized casino protocol where cheating is cryptographically 
 
 ## What is this repo
 
-Everything you need to build and test ExoHash games locally:
+Everything you need to build and test ExoHash games and frontends locally — **without running a node**:
 
-- **Chain simulator** with integrated WASM execution (same logic as the real chain)
-- **3 reference games** — dice, crash, mines (full source + compiled WASM)
-- **React UI hooks** for building game frontends
-- **Bot framework** that generates live game activity
-- **Mock BFF server** (HTTP/SSE) — local dev server you run with one command
+- **`chainsim/`** — in-memory Go simulator with real WASM execution, beacon randomness, bankroll accounting
+- **`games/`** — 3 reference games (dice, crash, mines) — Go source + compiled WASM + test suite per game
+- **`cmd/bffsim/`** — mock HTTP/SSE BFF on `:4000` that wraps chainsim; Cosmos REST endpoints mocked so the UI runs unchanged
+- **`ui/`** — full Next.js casino frontend (snapshot of `exohash-play`) — wallet, signer, SSE feed, game pages
+- **`bots/` + `cmd/bot-runner/`** — 15 configurable bots that place live bets across all three games
+- **`CLAUDE_PROMPT.md`** — full developer reference (protocol, WASM API, game patterns, complete dice template)
 
-For the full protocol explanation — how DKG works, how randomness flows to games, how bankrolls and fees work, and how to design blackjack or parimutuel betting games — read **[CLAUDE_PROMPT.md](CLAUDE_PROMPT.md)**. It's written as context for AI assistants but serves as the complete developer reference.
-
-## Quick Start
+## Quick demo
 
 ```bash
-git clone https://github.com/exohash-labs/exohash-devkit
-cd exohash-devkit
-
-# Start the local chain + game server
-go run ./cmd/mock-bff &
-
-# Start bots (optional — generates live game activity)
-go run ./cmd/bot-runner &
-
-# Start the demo UI
-cd demo && npm install && npm run dev
+./start_demo.sh              # builds + runs bffsim :4000, UI :3001, 15 bots
+./start_demo.sh --no-bots    # skip the bots
+./start_demo.sh --dev        # `npm run dev` instead of prod build (hot reload)
+./start_demo.sh stop         # shut everything down
+./start_demo.sh logs         # tail bffsim/ui/bots logs together
 ```
 
-Open http://localhost:3002 — play dice, crash, mines with live bots. Tap **+ FAUCET** for test tokens.
+Logs land in `.devkit/{bffsim,ui,bots}.log`. The three services are described individually below.
 
-## Repository Structure
+## Three user journeys
 
-```
-CLAUDE_PROMPT.md       Full developer reference — protocol, game patterns, WASM API, dice template
-chainsim/              Chain simulator with WASM game execution
-gamekit/               WASM game examples (source + compiled)
-  examples/dice/       Solo instant game — bet, roll, settle in 2 blocks
-  examples/mines/      Solo multi-action — reveal tiles, cashout anytime
-  examples/crash/      Session multiplayer — rising multiplier, multiple players
-uikit/                 React hooks (useMines, useCrash, useDice, useStream, ...)
-bots/                  Bot implementations (dice, crash, mines) — HTTP clients
-demo/                  Next.js demo app with all 3 games
-cmd/mock-bff/          Local HTTP/SSE dev server
-cmd/bot-runner/        Bot runner process
-wasm/                  Pre-compiled game binaries
-tests/                 Game simulation suite (go run ./tests/dice, ./tests/mines, ./tests/crash)
-config.yaml            Mock BFF config (games, bankroll, faucet)
-bots.yaml              Bot config (strategies, frequencies)
+### 1. Build a new game
+
+Write Go, compile with TinyGo, test against chainsim.
+
+```bash
+# Run the shipped test suites — house edge, error semantics, gas accounting
+cd games/dice && go run .
+cd games/mines && go run .
+cd games/crash && go run .
+
+# Build your own
+cd games/dice
+tinygo build -o dice.wasm -target=wasi -no-debug -opt=2 .
 ```
 
-## Build a Game
+Start from the complete dice template in [`CLAUDE_PROMPT.md`](CLAUDE_PROMPT.md). Or paste that file into Claude / ChatGPT and say: *"Build me a blackjack game."*
 
-1. Read [CLAUDE_PROMPT.md](CLAUDE_PROMPT.md) — protocol, game patterns, WASM API, complete dice template
-3. Write your game in Go, compile with TinyGo:
-   ```bash
-   tinygo build -o mygame.wasm -target=wasi -no-debug -opt=2 .
-   ```
-4. Add to `config.yaml`, restart mock-bff — your game is live locally
-5. Deploy to chain: `exohashd tx house register-calculator mygame.wasm`
+### 2. Build a new frontend
 
-Or paste `CLAUDE_PROMPT.md` into Claude / ChatGPT and say: *"Build me a blackjack game"*
+Run the mock backend, develop against real chain behavior:
 
-## Build a React UI
+```bash
+# Terminal 1 — mock chain + BFF on :4000
+go run ./cmd/bffsim
 
-```tsx
-import { ExoProvider, useMines } from "@exohash/uikit";
-
-<ExoProvider bffUrl="http://localhost:4000" address={addr}>
-  <MinesGame />
-</ExoProvider>
-
-function MinesGame() {
-  const { start, reveal, cashout, board, active, multiplier } = useMines();
-}
+# Terminal 2 — reference UI on :3001
+cd ui
+npm install
+npm run build && npm start -- --port 3001   # prod bundle, ~10ms page loads
+# or: npm run dev -- --port 3001            # Turbopack dev (slower)
 ```
 
-## API Endpoints
+Open `http://localhost:3001/dice`. Click *Create Wallet* → *Get test USDC* → *Authorize* → place bets. The bffsim ticks one block every 500ms; dice settles on the next block.
+
+The `ui/` directory is a **snapshot of [exohash-play](https://github.com/exohash-labs/exohash-play)** — fork it, rip out what you don't need, or use it as reference for your own frontend.
+
+### 3. Live activity — spin up bots
+
+```bash
+# Terminal 3 — 15 bots across dice, crash, mines
+go run ./cmd/bot-runner
+```
+
+Bot strategies (stake, cashout multiplier, frequency) live in [`bots.yaml`](bots.yaml). With bffsim, the runner auto-generates fresh addresses and funds them via the mock faucet — no keyring setup required.
+
+## Full-stack integration (optional)
+
+For an end-to-end run against the **real chain** (not chainsim), clone the main
+[exohash](https://github.com/exohash-labs/exohash) repo and run `scripts/run_all.sh` — it
+brings up `exohashd`, the real BFF on `:3100`, 15 authz-funded bots, and the play
+UI against a single-node devnet. Linux/amd64 only.
+
+## Repository layout
+
+```
+CLAUDE_PROMPT.md       Full developer reference — protocol, WASM API, game patterns, dice template
+chainsim/              In-memory chain simulator with WASM game execution
+games/                 Reference games (source + compiled WASM + test suite)
+  dice/                Solo instant — bet, roll, settle next block
+  mines/               Solo multi-step — reveal tiles, cashout anytime
+  crash/               Multiplayer session — rising multiplier, multi-player cashouts
+cmd/bffsim/            Mock HTTP/SSE BFF (:4000) wrapping chainsim
+cmd/bot-runner/        Bot runner process (reads bots.yaml)
+bots/                  Bot implementations (dice, crash, mines) + SSE client
+ui/                    Next.js casino frontend (exohash-play snapshot)
+config.yaml            chainsim + bffsim configuration (games, bankroll, block time)
+bots.yaml              Bot strategies
+```
+
+## API endpoints (bffsim)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/stream` | SSE event stream (`?games=1,2&address=x`) |
-| POST | `/relay/place-bet` | Place a bet |
-| POST | `/relay/bet-action` | Player action (reveal, cashout, hit, etc.) |
-| POST | `/faucet/request` | Fund test account |
-| GET | `/account/{addr}/balance` | Account balance |
-| GET | `/account/{addr}/bets` | Bet history |
-| GET | `/bet/{id}/state` | Bet state + events (for cold start) |
-| GET | `/games` | List registered games |
-| GET | `/health` | Server status |
+| GET  | `/stream?games=1,2&address=x` | SSE event stream (replay + live) |
+| POST | `/relay/place-bet`            | Place a bet (relay-signed) |
+| POST | `/relay/bet-action`           | Player action (reveal, cashout, hit…) |
+| POST | `/faucet/request`             | Fund test account (100 USDC) |
+| GET  | `/account/{addr}/balance`     | Account balance |
+| GET  | `/account/{addr}/bets`        | Player bet history |
+| GET  | `/bet/{id}/state`             | Bet state + calc events (cold start) |
+| GET  | `/games`                      | Registered games (calcId, bankrollId, wasmHash, edge) |
+| GET  | `/game/{id}/info`             | Single game details |
+| GET  | `/health`                     | Server status |
+| GET  | `/cosmos/auth/v1beta1/accounts/{addr}` | Cosmos account mock (for UI signer) |
+| GET  | `/cosmos/base/tendermint/v1beta1/node_info` | Cosmos node info mock |
+| POST | `/cosmos/tx/v1beta1/txs`      | Cosmos broadcast mock |
+| GET  | `/cosmos/authz/v1beta1/grants` | authz grant existence mock |
 
 ## Links
 

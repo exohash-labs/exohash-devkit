@@ -8,17 +8,20 @@ bankroll:
 
 games:
   - name: dice
-    wasm: wasm/dice.wasm
+    wasm: games/dice/dice.wasm
     calcId: 1
-    houseEdgeBp: 200
+    houseEdgeBp: 100
+    sourceUrl: "https://github.com/exohash-labs/exohash-devkit/tree/main/games/dice"
   - name: crash
-    wasm: wasm/crash.wasm
+    wasm: games/crash/crash.wasm
     calcId: 2
-    houseEdgeBp: 200
+    houseEdgeBp: 100
+    sourceUrl: "https://github.com/exohash-labs/exohash-devkit/tree/main/games/crash"
   - name: mines
-    wasm: wasm/mines.wasm
+    wasm: games/mines/mines.wasm
     calcId: 3
-    houseEdgeBp: 200
+    houseEdgeBp: 100
+    sourceUrl: "https://github.com/exohash-labs/exohash-devkit/tree/main/games/mines"
 
 faucet:
   amount: 100000000  # 100 USDC per request

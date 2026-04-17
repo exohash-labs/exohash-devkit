@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// StreamEvent matches the mock-bff SSE protocol.
+// StreamEvent matches the BFF SSE protocol.
 type StreamEvent struct {
 	Height       uint64       `json:"height"`
 	Time         string       `json:"time,omitempty"`
@@ -33,7 +33,7 @@ type BetSettled struct {
 	PayoutKind int    `json:"payoutKind"`
 }
 
-// Stream connects to mock-bff SSE and delivers events on a channel.
+// Stream connects to BFF SSE and delivers events on a channel.
 type Stream struct {
 	baseURL string
 	events  chan StreamEvent

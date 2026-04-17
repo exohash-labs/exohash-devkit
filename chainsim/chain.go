@@ -5,11 +5,16 @@ package chainsim
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/tetratelabs/wazero"
 )
+
+// ErrBeaconUnavailable mirrors x/house/types.ErrBeaconUnavailable —
+// returned when bets are rejected because the DKG beacon is down.
+var ErrBeaconUnavailable = errors.New("beacon randomness unavailable — games paused")
 
 // CalcMode determines which operations are available to the WASM calculator.
 // Mirrors x/house/keeper.CalcMode. The host enforces these gates so that
@@ -21,13 +26,6 @@ const (
 	CalcModeBetAction   CalcMode = 2 // MsgBetAction — player in-game action
 	CalcModeBlockUpdate CalcMode = 3 // BeginBlock — seed-based tick processing
 	CalcModeInitGame    CalcMode = 4 // Kickstart — one-time game setup
-)
-
-// Gas budget constants.
-const (
-	GasInitialCredits uint64 = 1_000_000_000 // 1B gas on calculator deploy
-	GasCreditPerBet   uint64 = 1_000_000     // 1M gas per successful place_bet
-	GasMaxPerBlock    uint64 = 10_000_000    // 10M hard cap per block_update call
 )
 
 // CalcEvent is a WASM calculator event (topic + JSON data).
@@ -74,6 +72,14 @@ type Chain struct {
 	height uint64
 	seed   uint64 // RNG seed (deterministic)
 
+	// Beacon availability. Mirrors the chain's DKG circuit breaker:
+	// when false, PlaceBet/BetAction return ErrBeaconUnavailable and
+	// block_update is skipped until beacon is restored. If the beacon
+	// stays down for > params.AutoRefundBlocks, all open bets are
+	// refunded on the next AdvanceBlock.
+	beaconDown      bool
+	beaconDownSince uint64 // height at which beacon went down
+
 	// Execution mode — mirrors keeper CalcMode.
 	mode         CalcMode
 	activeCalcID uint64 // which game is currently executing WASM
@@ -112,6 +118,22 @@ func (c *Chain) SetMode(mode CalcMode) {
 	c.mu.Lock()
 	c.mode = mode
 	c.mu.Unlock()
+}
+
+// SetBeaconAvailable toggles the beacon circuit breaker.
+// When false, PlaceBet/BetAction return ErrBeaconUnavailable and
+// block_update is skipped. Mirrors the chain's BeaconLiveForBets gate.
+// Default is true (beacon up).
+func (c *Chain) SetBeaconAvailable(available bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !available && !c.beaconDown {
+		c.beaconDown = true
+		c.beaconDownSince = c.height
+	} else if available {
+		c.beaconDown = false
+		c.beaconDownSince = 0
+	}
 }
 
 // New creates a new chain simulator with default params and seed 42.
@@ -208,11 +230,11 @@ func (c *Chain) WasmMemorySize(calcID uint64) uint32 {
 }
 
 // computeGasBudget returns the block_update gas budget for a calculator.
-// Capped by both GasMaxPerBlock and the remaining gas balance.
+// Capped by both params.GasMaxPerBlock and the remaining gas balance.
 func (c *Chain) computeGasBudget(calcID uint64) uint64 {
 	bal := c.gasBalance[calcID]
-	if bal > GasMaxPerBlock {
-		return GasMaxPerBlock
+	if bal > c.params.GasMaxPerBlock {
+		return c.params.GasMaxPerBlock
 	}
 	return bal
 }

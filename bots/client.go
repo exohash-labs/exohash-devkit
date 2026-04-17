@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-// Client talks to mock-bff via HTTP — same as a real player.
+// Client talks to the BFF via HTTP — same as a real player.
 type Client struct {
 	BaseURL string
 }
@@ -72,6 +72,28 @@ func (c *Client) Faucet(addr string) error {
 		return fmt.Errorf("%s", resp.Error)
 	}
 	return nil
+}
+
+type GameInfo struct {
+	CalcID     uint64 `json:"calcId"`
+	BankrollID uint64 `json:"bankrollId"`
+	Engine     string `json:"engine"`
+}
+
+// FetchGames returns a map of engine name → GameInfo from the BFF.
+func (c *Client) FetchGames() map[string]GameInfo {
+	resp, err := http.Get(c.BaseURL + "/games")
+	if err != nil {
+		return map[string]GameInfo{}
+	}
+	defer resp.Body.Close()
+	var games []GameInfo
+	json.NewDecoder(resp.Body).Decode(&games)
+	m := make(map[string]GameInfo)
+	for _, g := range games {
+		m[g.Engine] = g
+	}
+	return m
 }
 
 func (c *Client) post(path string, body any, result any) error {

@@ -8,9 +8,10 @@ import (
 
 // DiceBot places random dice bets every N blocks.
 type DiceBot struct {
-	addr     string
-	calcID   uint64
-	minStake uint64
+	addr       string
+	calcID     uint64
+	bankrollID uint64
+	minStake   uint64
 	maxStake uint64
 	chance   uint64 // chance in bp (e.g. 5000 = 50%)
 	every    int
@@ -19,9 +20,10 @@ type DiceBot struct {
 }
 
 type DiceBotConfig struct {
-	Address  string
-	CalcID   uint64
-	MinStake uint64
+	Address    string
+	CalcID     uint64
+	BankrollID uint64
+	MinStake   uint64
 	MaxStake uint64
 	ChanceBP uint64
 	Every    int
@@ -38,8 +40,9 @@ func NewDiceBot(cfg DiceBotConfig) *DiceBot {
 		chance = 5000
 	}
 	return &DiceBot{
-		addr:     cfg.Address,
-		calcID:   cfg.CalcID,
+		addr:       cfg.Address,
+		calcID:     cfg.CalcID,
+		bankrollID: cfg.BankrollID,
 		minStake: cfg.MinStake,
 		maxStake: cfg.MaxStake,
 		chance:   chance,
@@ -48,9 +51,10 @@ func NewDiceBot(cfg DiceBotConfig) *DiceBot {
 	}
 }
 
-func (b *DiceBot) Address() string { return b.addr }
-func (b *DiceBot) CalcID() uint64  { return b.calcID }
-func (b *DiceBot) SetBetID(uint64) {}
+func (b *DiceBot) Address() string    { return b.addr }
+func (b *DiceBot) CalcID() uint64     { return b.calcID }
+func (b *DiceBot) BankrollID() uint64 { return b.bankrollID }
+func (b *DiceBot) SetBetID(uint64)    {}
 
 func (b *DiceBot) OnEvent(topic string, data json.RawMessage) Action {
 	if topic != "block" {

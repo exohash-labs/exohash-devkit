@@ -271,42 +271,42 @@ payoutPool := totalBets × (10000 - edgeBP) / 10000
 
 ```
 chainsim/              Chain simulator — runs WASM games locally (same logic as real chain)
-gamekit/               Reference WASM game source code + AI dev guide
-  examples/dice/       Solo instant game (26KB WASM)
-  examples/mines/      Solo multi-action game (33KB WASM)
-  examples/crash/      Session multiplayer game (38KB WASM)
-  CLAUDE_PROMPT.md     Detailed WASM development guide with complete dice template
-uikit/                 React hooks for game UIs (useStream, useMines, useCrash, useDice)
-bots/                  Bot framework — HTTP clients that play games
-demo/                  Next.js demo app with all 3 games
-cmd/mock-bff/          Local HTTP/SSE dev server
+games/                 Reference games: source + compiled WASM + test suite per game
+  dice/                Solo instant game (~36KB WASM)
+  mines/               Solo multi-action game (~33KB WASM)
+  crash/               Session multiplayer game (~38KB WASM)
+cmd/bffsim/            Mock HTTP/SSE BFF on :4000 wrapping chainsim
 cmd/bot-runner/        Bot runner process
-wasm/                  Pre-compiled game binaries
+bots/                  Bot framework — HTTP clients that play games
+ui/                    Next.js reference casino frontend (exohash-play snapshot)
 ```
 
 ### Running locally
+Game-only iteration (no node) — run the chain simulator test suite per game:
 ```bash
 git clone https://github.com/exohash-labs/exohash-devkit
-cd exohash-devkit
-go run ./cmd/mock-bff &          # chain simulator + HTTP/SSE server
-go run ./cmd/bot-runner &        # bots generate live game activity
-cd demo && npm install && npm run dev  # React demo on :3002
+cd exohash-devkit/games/dice && go run .    # house edge + error semantics + gas
 ```
+
+Frontend dev (mock backend, no node):
+```bash
+go run ./cmd/bffsim                                    # terminal 1 — :4000
+cd ui && npm install && npm run build && npm start -- --port 3001   # terminal 2 — :3001
+go run ./cmd/bot-runner                                # terminal 3 — 15 bots (optional)
+```
+
+End-to-end dev stack (real node + BFF + bots + UI) lives in the main
+[exohash](https://github.com/exohash-labs/exohash) repo — run `scripts/run_all.sh`.
 
 ### Building a new WASM game
 ```bash
-# Write your game in Go (see gamekit/examples/ for reference)
+# Write your game in Go (see games/dice/ for the reference template)
 mkdir mygame && cd mygame
 # ... write main.go with exports: place_bet, block_update, info, alloc ...
 tinygo build -o mygame.wasm -target=wasi -no-debug -opt=2 .
 
-# Add to config.yaml:
-#   - name: mygame
-#     wasm: mygame.wasm
-#     calcId: 4
-#     houseEdgeBp: 200
-
-# Restart mock-bff — your game is live locally
+# Test against chainsim first (add a sim harness under tests/mygame),
+# then deploy to the chain (see below).
 ```
 
 ### Deploying to the real chain
@@ -318,30 +318,22 @@ exohashd tx house bankroll-add-calculator 1 <calc_id> --from bankroll_owner
 
 ## Building a React UI
 
-The `uikit/` package provides React hooks:
+The `ui/` directory is a full Next.js casino frontend — a snapshot of
+[`exohash-play`](https://github.com/exohash-labs/exohash-play). Use it as a runnable
+demo, a reference implementation, or a fork target.
 
-```tsx
-import { ExoProvider, useMines, useCrash, useDice, useBalance } from "@exohash/uikit";
+Key pieces to copy when building your own:
 
-function App() {
-  return (
-    <ExoProvider bffUrl="http://localhost:4000" address={walletAddr}>
-      <GamePage />
-    </ExoProvider>
-  );
-}
+- `ui/lib/bff.ts`      — REST client for the BFF (bets, faucet, accounts, games)
+- `ui/lib/signer.ts`   — cosmjs-based authz grant signing
+- `ui/lib/wallet.ts`   — browser HD wallet (create/import/unlock/lock, encrypted storage)
+- `ui/lib/useStream.ts` — SSE subscription with replay → live boundary via `flushSync`
+- `ui/lib/useBetFeed.ts` — generic calc-event feed with a per-game parser
+- `ui/lib/useWaitForBet.ts` — watch a single bet to settlement
+- `ui/contexts/`        — React context providers wiring the above together
 
-function MinesGame() {
-  const { start, reveal, cashout, board, active, multiplier, payout } = useMines();
-  // start("1000000", 3)  → start game with 1 USDC, 3 mines
-  // reveal(12)            → reveal tile 12
-  // cashout()             → cash out current winnings
-}
-```
-
-Available hooks: `useMines`, `useCrash`, `useDice`, `useBalance`, `useStream`, `usePlaceBet`, `useBetAction`
-
-The hooks handle SSE streaming, optimistic updates, error recovery, and cold-start restoration automatically.
+For dev you only need `bffsim` — the Cosmos REST mocks let the signer path run
+unchanged against it, so the same UI code works against bffsim or a real chain.
 
 ## What to build
 

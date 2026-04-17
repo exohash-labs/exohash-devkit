@@ -1,49 +1,67 @@
 bffUrl: http://localhost:4000
 
 crash:
-  - name: well-done
+  - name: crash-safe
     stake: 1000000
-    cashout: 12000    # 1.2x
-  - name: medium-well
+    cashout: 12000
+  - name: crash-mid
     stake: 1000000
-    cashout: 15000    # 1.5x
-  - name: medium
+    cashout: 15000
+  - name: crash-risky
     stake: 1000000
-    cashout: 20000    # 2.0x
-  - name: medium-rare
+    cashout: 20000
+  - name: crash-yolo
     stake: 1000000
-    cashout: 35000    # 3.5x
-  - name: rare
+    cashout: 35000
+  - name: crash-moon
     stake: 1000000
-    cashout: 50000    # 5.0x
+    cashout: 50000
 
 dice:
-  - name: cautious
+  - name: dice-safe
     stake: 500000
-    chanceBp: 7500    # 75% chance
+    chanceBp: 7500
     every: 6
-  - name: balanced
+  - name: dice-mid
     stake: 1000000
-    chanceBp: 5000    # 50/50
+    chanceBp: 5000
     every: 8
-  - name: gambler
+  - name: dice-risky
     stake: 2000000
-    chanceBp: 2500    # 25% chance
+    chanceBp: 2500
     every: 10
+  - name: dice-fast
+    stake: 500000
+    chanceBp: 5000
+    every: 5
+  - name: dice-slow
+    stake: 1000000
+    chanceBp: 6000
+    every: 12
 
 mines:
-  - name: careful
+  - name: mines-careful
     stake: 1000000
     mines: 3
     reveals: 2
     every: 20
-  - name: explorer
+  - name: mines-explorer
     stake: 1000000
     mines: 5
     reveals: 3
     every: 25
-  - name: sweeper
+  - name: mines-sweeper
     stake: 2000000
     mines: 1
     reveals: 5
     every: 15
+  - name: mines-brave
+    stake: 1000000
+    mines: 7
+    reveals: 2
+    every: 30
+  - name: mines-quick
+    stake: 500000
+    mines: 3
+    reveals: 1
+    every: 10

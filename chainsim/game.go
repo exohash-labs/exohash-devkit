@@ -95,7 +95,7 @@ func (c *Chain) RegisterGame(calcID uint64, wasmBytes []byte, name string, house
 	}
 
 	// Grant initial gas credits.
-	c.gasBalance[calcID] = GasInitialCredits
+	c.gasBalance[calcID] = c.params.GasInitialCredits
 
 	return nil
 }

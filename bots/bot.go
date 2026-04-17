@@ -23,6 +23,7 @@ const (
 type Bot interface {
 	Address() string
 	CalcID() uint64
+	BankrollID() uint64
 	OnEvent(topic string, data json.RawMessage) Action
 	SetBetID(betID uint64)
 }

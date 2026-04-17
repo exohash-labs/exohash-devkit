@@ -1,0 +1,439 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: var(--font-display), "Space Grotesk", system-ui, sans-serif;
+  --font-title: var(--font-orbitron), "Orbitron", system-ui, sans-serif;
+  --color-lime: #c8f547;
+  --color-lime-dim: #c8f54720;
+  --color-surface: #0d0f14;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html, body {
+  background: #0b0d12;
+  color: #d1d5db;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+body {
+  position: relative;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e2235; border-radius: 2px; }
+
+/* ── Rich atmospheric background ── */
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  background:
+    url("/hero-bg.png") center top / cover no-repeat,
+    linear-gradient(180deg, #111520 0%, #0a0d14 40%, #060810 100%);
+}
+
+.atmosphere::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(6, 8, 16, 0.05) 0%,
+    rgba(6, 8, 16, 0.25) 45%,
+    rgba(6, 8, 16, 0.85) 100%
+  );
+}
+
+/* ── Entrance animations ── */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: fade-in-up 0.7s ease-out both;
+}
+
+.delay-1 { animation-delay: 0.1s; }
+.delay-2 { animation-delay: 0.2s; }
+.delay-3 { animation-delay: 0.3s; }
+.delay-4 { animation-delay: 0.4s; }
+.delay-5 { animation-delay: 0.5s; }
+.delay-6 { animation-delay: 0.6s; }
+.delay-7 { animation-delay: 0.7s; }
+
+/* ── Hero accent text — gold #fde48b from pixel extraction ── */
+.hero-green-text {
+  color: #fde48b;
+  text-shadow: 0 0 30px rgba(253, 228, 139, 0.2);
+}
+
+/* ── CTA button — GREEN #98f38a from pixel extraction ── */
+.cta-btn {
+  background: linear-gradient(135deg, #90f085, #98f38a, #90f085);
+  box-shadow:
+    0 0 40px rgba(152, 243, 138, 0.3),
+    0 0 80px rgba(152, 243, 138, 0.1),
+    0 4px 20px rgba(0, 0, 0, 0.4);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.cta-btn:hover {
+  box-shadow:
+    0 0 50px rgba(152, 243, 138, 0.4),
+    0 0 100px rgba(152, 243, 138, 0.15),
+    0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.cta-btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  animation: btn-shine 4s ease-in-out infinite;
+}
+
+/* ── Header wallet button — white text on dark solid bg ── */
+.header-wallet-btn {
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  background: rgba(20, 24, 35, 0.9);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.header-wallet-btn:hover {
+  background: rgba(30, 34, 48, 0.95);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* ── GAMES heading with decorative lines ── */
+.games-heading {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  justify-content: center;
+  text-shadow: 0 0 20px rgba(212, 184, 96, 0.3);
+}
+
+.games-heading::before,
+.games-heading::after {
+  content: "";
+  flex: 1;
+  max-width: 100px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212, 184, 96, 0.3), transparent);
+}
+
+/* ── Game cards — dark panels with golden border ── */
+.ref-game-card {
+  border-radius: 20px;
+  background: linear-gradient(
+    180deg,
+    rgba(28, 30, 40, 0.97) 0%,
+    rgba(16, 18, 26, 0.99) 100%
+  );
+  border: 1.5px solid rgba(212, 184, 96, 0.25);
+  box-shadow:
+    0 4px 40px rgba(0, 0, 0, 0.5),
+    0 0 0 0.5px rgba(212, 184, 96, 0.15),
+    0 0 40px rgba(212, 184, 96, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+.ref-game-card:hover {
+  border-color: rgba(212, 184, 96, 0.4);
+  box-shadow:
+    0 0 50px rgba(212, 184, 96, 0.1),
+    0 20px 60px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+/* Card icon area — warmer glow */
+.card-icon-area {
+  background: radial-gradient(ellipse at center 40%, rgba(60, 55, 40, 0.55) 0%, transparent 65%);
+}
+
+.ref-game-card .game-thumb {
+  transition: transform 0.4s ease, filter 0.4s ease;
+}
+
+.ref-game-card:hover .game-thumb {
+  transform: scale(1.05);
+  filter: brightness(1.15);
+}
+
+/* Game type badge — golden casino chip */
+.game-type-badge {
+  color: #d4b860;
+  border: 1px solid rgba(212, 184, 96, 0.4);
+  background: rgba(212, 184, 96, 0.1);
+}
+
+/* ── Subtle grain overlay ── */
+.grain::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  opacity: 0.02;
+  pointer-events: none;
+  z-index: 100;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* ── Glow utilities ── */
+.glow-green { text-shadow: 0 0 12px rgba(0, 230, 118, 0.5); }
+.glow-blue { text-shadow: 0 0 12px rgba(79, 195, 247, 0.5); }
+.glow-lime { text-shadow: 0 0 20px rgba(200, 245, 71, 0.4); }
+
+/* ── Pulse ── */
+@keyframes pulse-slow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.pulse-slow { animation: pulse-slow 2s ease-in-out infinite; }
+
+@keyframes countdown-tick {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+.countdown-tick { animation: countdown-tick 1s ease-in-out infinite; }
+
+/* ── Live indicator pulse ── */
+@keyframes live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 232, 160, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(212, 232, 160, 0); }
+}
+
+.live-dot {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+/* ── Button shine sweep ── */
+@keyframes btn-shine {
+  0% { left: -100%; }
+  100% { left: 200%; }
+}
+
+.btn-primary {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  animation: btn-shine 4s ease-in-out infinite;
+}
+
+/* ── Play Now button — glossy 3D green ── */
+.play-btn {
+  background: linear-gradient(180deg, #34d058 0%, #1a9f3b 40%, #0d7a2b 100%);
+  box-shadow:
+    0 0 20px rgba(52, 208, 88, 0.3),
+    0 0 40px rgba(52, 208, 88, 0.1),
+    inset 0 1px 1px rgba(255, 255, 255, 0.25),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(52, 208, 88, 0.4);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: all 0.25s ease;
+}
+
+.play-btn:hover {
+  background: linear-gradient(180deg, #3ee066 0%, #22b847 40%, #11903a 100%);
+  box-shadow:
+    0 0 30px rgba(52, 208, 88, 0.45),
+    0 0 60px rgba(52, 208, 88, 0.15),
+    inset 0 1px 1px rgba(255, 255, 255, 0.3),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Card hover glow (legacy) ── */
+.card-luxury {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+.card-luxury:hover {
+  border-color: rgba(200, 245, 71, 0.2);
+  box-shadow: 0 0 40px rgba(200, 245, 71, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* ── Shimmer effect ── */
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.shimmer-text {
+  background-size: 200% auto;
+  animation: shimmer 8s linear infinite;
+}
+
+/* ── Section heading with decorative lines ── */
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.section-heading::before,
+.section-heading::after {
+  content: "";
+  flex: 1;
+  max-width: 120px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(200, 245, 71, 0.2), transparent);
+}
+
+/* ── Mines page — purple casino theme ── */
+.page-bg {
+  background: #000000;
+}
+
+.page-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: url("/mines-bg.jpg") center bottom / cover no-repeat;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.neon-gold {
+  text-shadow: 0 0 10px #facc15, 0 0 20px #eab308, 0 0 30px #ca8a04;
+}
+
+.mines-tile {
+  aspect-ratio: 1/1;
+  background: linear-gradient(145deg, #2a1a4a, #1a1033);
+  border: 3px solid #6b21a8;
+  box-shadow:
+    0 0 15px rgba(234, 179, 8, 0.15),
+    inset 0 4px 8px rgba(255,255,255,0.08),
+    inset 0 -4px 8px rgba(0,0,0,0.6);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.mines-tile:not(:disabled):hover {
+  box-shadow: 0 0 25px #eab308, 0 0 35px #c026d3;
+  border-color: #eab308;
+}
+
+.mines-tile:not(:disabled):active {
+  transform: scale(0.95);
+}
+
+.mines-tile-safe {
+  background: linear-gradient(145deg, #4c1d95, #2a1a4a) !important;
+  border-color: #facc15 !important;
+  box-shadow: 0 0 20px rgba(250, 204, 21, 0.4) !important;
+}
+
+.mines-tile-mine {
+  background: linear-gradient(145deg, #7f1d1d, #450a0a) !important;
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.4) !important;
+}
+
+.mines-tile-pending {
+  background: linear-gradient(145deg, #2a1a4a, #1a1033) !important;
+  border-color: #eab308 !important;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.mines-tile-disabled {
+  background: linear-gradient(145deg, #1a1033, #0f0a1e) !important;
+  border-color: rgba(107, 33, 168, 0.3) !important;
+  box-shadow: none !important;
+  cursor: default !important;
+}
+
+.glass-card {
+  background: rgba(15, 10, 30, 0.85);
+  border: 2px solid rgba(234, 179, 8, 0.35);
+  box-shadow: 0 0 40px rgba(192, 38, 211, 0.2);
+}
+
+.glass-panel {
+  background: rgba(15, 10, 30, 0.85);
+  border: 1px solid rgba(107, 33, 168, 0.3);
+}
+
+.btn-start {
+  background: linear-gradient(135deg, #ff00aa, #7b00ff);
+  color: white;
+  box-shadow: 0 0 25px rgba(123, 0, 255, 0.6);
+  transition: all 0.3s ease;
+}
+
+.btn-start:hover {
+  box-shadow: 0 0 35px rgba(123, 0, 255, 0.8);
+}
+
+
+.btn-muted {
+  background: transparent;
+  color: #71717a;
+  font-weight: 500;
+  border: 1px solid rgba(113, 113, 122, 0.2);
+  cursor: default;
+}
+
+.btn-action {
+  background: linear-gradient(135deg, #00ff9d, #00cc77);
+  color: #000;
+  font-weight: 700;
+  box-shadow: 0 0 20px rgba(0, 255, 157, 0.7);
+  transition: all 0.3s ease;
+}
+
+.btn-action:hover {
+  box-shadow: 0 0 45px rgba(0, 255, 157, 0.95);
+}
+
+.btn-disabled {
+  background: rgba(88, 28, 135, 0.5);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  cursor: not-allowed;
+}
+
+@keyframes mines-step-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.mines-step-active {
+  animation: mines-step-pulse 2s ease-in-out infinite;
+}
+
+.stake-chip-active {
+  background: #eab308 !important;
+  color: #1a1033 !important;
+  box-shadow: 0 0 15px #eab308;
+}

@@ -6,7 +6,7 @@ import (
 )
 
 func TestInjectGasMetering_Dice(t *testing.T) {
-	raw, err := os.ReadFile("../wasm/dice.wasm")
+	raw, err := os.ReadFile("../games/dice/dice.wasm")
 	if err != nil {
 		t.Skipf("dice.wasm not found: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestInjectGasMetering_AllGames(t *testing.T) {
 	games := []string{"dice", "crash", "mines"}
 	for _, game := range games {
 		t.Run(game, func(t *testing.T) {
-			raw, err := os.ReadFile("../wasm/" + game + ".wasm")
+			raw, err := os.ReadFile("../games/" + game + "/" + game + ".wasm")
 			if err != nil {
 				t.Skipf("%s.wasm not found: %v", game, err)
 			}
