@@ -24,3 +24,6 @@ ui/test-results/
 games/*/dice
 games/*/crash
 games/*/mines
+
+# Test output artifacts
+games/*/tests/*.res.txt
