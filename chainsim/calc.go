@@ -279,6 +279,10 @@ func hostKVGet(ctx context.Context, mod api.Module, stack []uint64) {
 	}
 	store := kvStoreFromCtx(ctx)
 	val, found := store.Get(keyBytes)
+	// SDK gas: 1000 base + 30 per byte of value returned (mirrors IAVL read).
+	if c := chainFromCtx(ctx); c != nil {
+		c.chargeSdkGas(c.activeCalcID, 1000+uint64(len(val))*30)
+	}
 	if !found || len(val) == 0 {
 		stack[0] = 0
 		return
@@ -310,6 +314,8 @@ func hostKVSet(ctx context.Context, mod api.Module, stack []uint64) {
 	c := chainFromCtx(ctx)
 	if c != nil {
 		writeBytes := uint64(len(keyBytes) + len(valBytes))
+		// SDK gas: 2000 base + 30 per byte written (mirrors IAVL write).
+		c.chargeSdkGas(c.activeCalcID, 2000+writeBytes*30)
 		var oldBytes uint64
 		if old, ok := store.Get(keyBytes); ok {
 			oldBytes = uint64(len(keyBytes) + len(old))
@@ -327,7 +333,10 @@ func hostKVSet(ctx context.Context, mod api.Module, stack []uint64) {
 }
 
 func hostKVHas(ctx context.Context, mod api.Module, stack []uint64) {
-	if c := chainFromCtx(ctx); c != nil { c.chargeGas(500) }
+	if c := chainFromCtx(ctx); c != nil {
+		c.chargeGas(500)
+		c.chargeSdkGas(c.activeCalcID, 500) // SDK gas: 500 flat (existence check)
+	}
 	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
 	keyBytes, _ := mod.Memory().Read(keyPtr, keyLen)
 	if kvStoreFromCtx(ctx).Has(keyBytes) {
@@ -338,7 +347,10 @@ func hostKVHas(ctx context.Context, mod api.Module, stack []uint64) {
 }
 
 func hostKVDelete(ctx context.Context, mod api.Module, stack []uint64) {
-	if c := chainFromCtx(ctx); c != nil { c.chargeGas(1000) }
+	if c := chainFromCtx(ctx); c != nil {
+		c.chargeGas(1000)
+		c.chargeSdkGas(c.activeCalcID, 1000) // SDK gas: 1000 flat (delete)
+	}
 	keyPtr, keyLen := uint32(stack[0]), uint32(stack[1])
 	keyBytes, _ := mod.Memory().Read(keyPtr, keyLen)
 
@@ -504,3 +516,4 @@ func hostGetGasUsed(ctx context.Context, _ api.Module, stack []uint64) {
 	}
 	stack[0] = c.totalGasUsed(c.activeCalcID)
 }
+

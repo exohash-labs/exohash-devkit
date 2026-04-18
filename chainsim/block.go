@@ -21,6 +21,11 @@ func (c *Chain) AdvanceBlock() BlockResult {
 	defer c.mu.Unlock()
 
 	c.height++
+	// Reset per-block aggregate accounting at the boundary. block_update
+	// (run below) and any subsequent place_bet/bet_action calls before the
+	// next AdvanceBlock all share these counters per calculator.
+	c.blockWasmUsed = make(map[uint64]uint64)
+	c.blockSdkUsed = make(map[uint64]uint64)
 	var buf [16]byte
 	binary.LittleEndian.PutUint64(buf[0:], c.seed)
 	binary.LittleEndian.PutUint64(buf[8:], c.height)
@@ -59,9 +64,15 @@ func (c *Chain) AdvanceBlock() BlockResult {
 		c.activeCalcID = calcID
 		ctx, _, _ := c.wasmCtxForGame(calcID)
 		budget := c.computeGasBudget(calcID)
+		// If no WASM budget remains for this calc this block, skip block_update.
+		// (Shouldn't happen at AdvanceBlock entry since counters were just
+		// reset, unless gasBalance is zero — in which case the calc gets killed
+		// by the existing balance-exhausted path on the next call.)
+		if budget == 0 {
+			continue
+		}
 		c.currentGasBudget = budget
 
-		// Snapshot WASM gas before call.
 		var gasBefore uint64
 		if game.inst.gasGlobal != nil {
 			gasBefore = game.inst.gasGlobal.Get()
@@ -72,11 +83,15 @@ func (c *Chain) AdvanceBlock() BlockResult {
 			fmt.Printf("block_update error (calc=%d, h=%d): %v\n", calcID, c.height, err)
 		}
 
-		// Deduct gas from balance. Kill if over budget or balance exhausted.
 		used := c.totalGasUsed(calcID)
 		c.currentGasBudget = 0 // clear so WASM can't read stale budget
-		if used > budget || !c.deductGas(calcID, used) {
-			_ = c.killCalculatorLocked(calcID, "gas_budget_exceeded")
+		c.blockWasmUsed[calcID] += used
+		if !c.deductGas(calcID, used) {
+			_ = c.killCalculatorLocked(calcID, "gas_balance_exhausted")
+		} else if c.blockWasmUsed[calcID] > c.params.PerCalcWasmGasPerBlock {
+			_ = c.killCalculatorLocked(calcID, "wasm_gas_per_block_exceeded")
+		} else if c.blockSdkUsed[calcID] > c.params.PerCalcSdkGasPerBlock {
+			_ = c.killCalculatorLocked(calcID, "sdk_gas_per_block_exceeded")
 		}
 
 		c.reinstantiateIfNeeded(calcID)

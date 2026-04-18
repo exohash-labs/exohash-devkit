@@ -105,6 +105,14 @@ type Chain struct {
 	gasBalance       map[uint64]uint64 // calcID → remaining gas credits
 	currentGasBudget uint64            // budget for current WASM call (read by host fn)
 
+	// Per-block aggregate accounting (reset at start of every AdvanceBlock).
+	// blockWasmUsed tracks WASM gas consumed by each calc across all WASM
+	// calls in this block (block_update + place_bets + bet_actions).
+	// blockSdkUsed tracks SDK store gas (kv_get/set/delete/has) per calc.
+	// Either exceeding its cap kills the calc.
+	blockWasmUsed map[uint64]uint64
+	blockSdkUsed  map[uint64]uint64
+
 	// WASM runtime + registered games.
 	wasmRT wazero.Runtime
 	games  map[uint64]*gameState
@@ -161,6 +169,8 @@ func NewWithParams(params Params, seed uint64) *Chain {
 		pendingActions: make(map[uint64][]byte),
 		kvUsage:        make(map[uint64]uint64),
 		gasBalance:     make(map[uint64]uint64),
+		blockWasmUsed:  make(map[uint64]uint64),
+		blockSdkUsed:   make(map[uint64]uint64),
 		nextBankrollID: 1,
 		nextBetID:      1,
 		seed:           seed,
@@ -229,14 +239,49 @@ func (c *Chain) WasmMemorySize(calcID uint64) uint32 {
 	return game.inst.mod.Memory().Size()
 }
 
-// computeGasBudget returns the block_update gas budget for a calculator.
-// Capped by both params.GasMaxPerBlock and the remaining gas balance.
+// BlockWasmUsed returns WASM gas consumed by this calculator in the current
+// block (sum across block_update + every place_bet/bet_action since the last
+// AdvanceBlock). Reset on each AdvanceBlock.
+func (c *Chain) BlockWasmUsed(calcID uint64) uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.blockWasmUsed[calcID]
+}
+
+// BlockSdkUsed returns SDK store gas consumed by this calculator in the
+// current block. Reset on each AdvanceBlock.
+func (c *Chain) BlockSdkUsed(calcID uint64) uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.blockSdkUsed[calcID]
+}
+
+// computeGasBudget returns the WASM gas budget for a single WASM call to
+// this calculator. Capped by:
+//  1. remaining per-block aggregate room (PerCalcWasmGasPerBlock - already used this block)
+//  2. remaining long-term gas balance
+//
+// Returns 0 if the calc is out of either budget — caller must reject the call.
 func (c *Chain) computeGasBudget(calcID uint64) uint64 {
 	bal := c.gasBalance[calcID]
-	if bal > c.params.GasMaxPerBlock {
-		return c.params.GasMaxPerBlock
+	used := c.blockWasmUsed[calcID]
+	cap := c.params.PerCalcWasmGasPerBlock
+	var blockRemaining uint64
+	if used < cap {
+		blockRemaining = cap - used
 	}
-	return bal
+	budget := blockRemaining
+	if bal < budget {
+		budget = bal
+	}
+	return budget
+}
+
+// chargeSdkGas adds amount to the per-calc per-block SDK gas counter.
+// Called by host KV functions to mirror Cosmos IAVL gas charging.
+// Caller must hold c.mu.
+func (c *Chain) chargeSdkGas(calcID, amount uint64) {
+	c.blockSdkUsed[calcID] += amount
 }
 
 // deductGas subtracts used gas from the calculator's balance.

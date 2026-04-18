@@ -34,6 +34,22 @@ function humanizeError(raw: string): string {
   return raw.replace(/failed to execute message; message index: \d+: /g, "").replace(/tx [A-F0-9]+: tx failed code=\d+: /g, "");
 }
 
+// ── Tick → multiplier table (mirrors WASM computeTickMult: 3.5% growth, cap 100x) ──
+
+const MAX_TICK = 134;
+const TICK_MULTS_BP: number[] = (() => {
+  const out: number[] = [10000];
+  let mult = 10000;
+  for (let i = 1; i <= MAX_TICK; i++) {
+    let next = Math.floor((mult * 10350) / 10000);
+    if (next <= mult) next = mult + 1;
+    if (next >= 1_000_000) { out.push(1_000_000); mult = 1_000_000; continue; }
+    out.push(next);
+    mult = next;
+  }
+  return out;
+})();
+
 // ── Types ──
 
 type CrashPhase = "waiting" | "open" | "tick" | "crashed";
@@ -47,6 +63,7 @@ type BetEntry = {
   multBp?: number;         // cashout mult (cashed) or crash mult (busted)
   payout?: number;         // uusdc
   mine?: boolean;          // true if this is the current user's bet
+  autoTick?: number;       // autocashout target tick (joined rows)
 };
 
 // ── Crash chart ──
@@ -186,7 +203,8 @@ function BetRow({ e, showPlayer, showProfit, isNew }: { e: BetEntry; showPlayer?
     ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
     : "bg-red-500/15 text-red-400 border border-red-500/30";
   const actionLabel = e.action === "joined" ? "JOINED" : e.action === "cashed" ? "CASHED" : "BUSTED";
-  const multColor = e.action === "cashed" ? "text-emerald-400" : e.action === "busted" ? "text-red-400" : "text-zinc-600";
+  const multColor = e.action === "cashed" ? "text-emerald-400" : e.action === "busted" ? "text-red-400" : "text-yellow-400/80";
+  const autoMultBp = e.action === "joined" && e.autoTick != null ? TICK_MULTS_BP[Math.min(e.autoTick, MAX_TICK)] : null;
 
   const profit = e.action === "cashed" && e.payout ? (e.payout - e.stake) / 1e6
     : e.action === "busted" ? -(e.stake / 1e6)
@@ -203,7 +221,7 @@ function BetRow({ e, showPlayer, showProfit, isNew }: { e: BetEntry; showPlayer?
         #{e.round}
       </td>
       <td className={`px-3 py-2 text-[12px] font-bold font-[family-name:var(--font-display)] ${multColor}`}>
-        {e.multBp ? `${(e.multBp / 10000).toFixed(2)}x` : "—"}
+        {e.multBp ? `${(e.multBp / 10000).toFixed(2)}x` : autoMultBp ? `@${(autoMultBp / 10000).toFixed(2)}x` : "—"}
       </td>
       <td className="px-3 py-2 text-right text-[12px] text-white font-bold font-[family-name:var(--font-display)]">
         ${(e.stake / 1e6).toFixed(2)}
@@ -261,6 +279,7 @@ function CrashGame() {
 
   // ── Player state ──
   const [stakeInput, setStakeInput] = useState("1.00");
+  const [autoTick, setAutoTick] = useState(21); // ~2.06x default
   const [joined, setJoined] = useState(false);
   const [betId, setBetId] = useState<number | null>(null);
   const [joining, setJoining] = useState(false);
@@ -412,6 +431,7 @@ function CrashGame() {
             buf.unshift({
               betId: d.bet_id, bettor: d.addr, round: prevRoundRef.current,
               stake: Number(d.stake) || 0, action: "joined" as const, mine: isMine,
+              autoTick: d.autocashout_tick,
             });
             // Set betId from SSE when our join is confirmed on-chain
             if (isMine && d.bet_id && !betIdRef.current) {
@@ -496,7 +516,10 @@ function CrashGame() {
     joinClickTime.current = performance.now();
 
     try {
-      await bff.relayPlaceBet({ address, bankrollId, gameId, stake: stake.toString(), gameState: [] });
+      const tickBytes = new Array(8);
+      let t = autoTick;
+      for (let i = 0; i < 8; i++) { tickBytes[i] = t & 0xff; t = Math.floor(t / 256); }
+      await bff.relayPlaceBet({ address, bankrollId, gameId, stake: stake.toString(), gameState: tickBytes });
       console.log(`[crash] click → joined: ${(performance.now() - joinClickTime.current).toFixed(0)}ms`);
       if (address) markBetPlaced(address);
       // betId will be set from SSE "joined" event matching our address
@@ -511,7 +534,7 @@ function CrashGame() {
       } else setError(humanizeError(msg));
     }
     setJoining(false);
-  }, [walletStatus, address, wallet, phase, stakeInput, balanceUusdc, bankrollId, gameId, openModal]);
+  }, [walletStatus, address, wallet, phase, stakeInput, balanceUusdc, bankrollId, gameId, autoTick, openModal]);
 
   const handleCashout = useCallback(async () => {
     if (!address || !betId || cashoutPhase) return;
@@ -680,6 +703,27 @@ function CrashGame() {
                         ${v.replace(/\.00$/, "")}
                       </button>
                     ))}
+                  </div>
+
+                  {/* Auto-cashout slider */}
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[10px] tracking-[0.25em] text-zinc-400 uppercase font-bold font-[family-name:var(--font-display)]">AUTO CASHOUT</div>
+                      <div className="text-sm font-black font-[family-name:var(--font-title)] text-yellow-400 tabular-nums">{(TICK_MULTS_BP[autoTick] / 10000).toFixed(2)}x</div>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={MAX_TICK}
+                      step={1}
+                      value={autoTick}
+                      onChange={e => setAutoTick(parseInt(e.target.value, 10))}
+                      disabled={!canJoin}
+                      className="w-full accent-yellow-400 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                    <div className="flex justify-between text-[9px] text-zinc-500 font-[family-name:var(--font-display)] mt-1 tracking-wider">
+                      <span>1.10x</span><span>10x</span><span>50x</span><span>100x</span>
+                    </div>
                   </div>
                 </div>
 

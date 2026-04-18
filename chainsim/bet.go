@@ -52,9 +52,13 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 		fullParams := append(senderBytes, params...)
 
 		ctx, _, _ := c.wasmCtxForGame(calcID)
-		c.currentGasBudget = c.params.GasMaxPerBlock
+		budget := c.computeGasBudget(calcID)
+		if budget == 0 {
+			// Per-block aggregate exhausted (or gas balance empty). Reject.
+			return 0, fmt.Errorf("place_bet: per-block WASM gas budget exhausted for calc %d", calcID)
+		}
+		c.currentGasBudget = budget
 
-		// Snapshot WASM gas before call.
 		var gasBefore uint64
 		if game.inst.gasGlobal != nil {
 			gasBefore = game.inst.gasGlobal.Get()
@@ -63,11 +67,19 @@ func (c *Chain) PlaceBet(addr string, bankrollID, calcID, stake uint64, params [
 
 		status, err := game.inst.callPlaceBet(ctx, betID, bankrollID, calcID, stake, fullParams)
 
-		// Deduct gas from balance. Kill if over per-call cap or balance exhausted.
 		used := c.totalGasUsed(calcID)
+		c.blockWasmUsed[calcID] += used
 		if !c.deductGas(calcID, used) {
 			_ = c.killCalculatorLocked(calcID, "gas_balance_exhausted")
 			return 0, fmt.Errorf("place_bet: gas balance exhausted (used %d)", used)
+		}
+		if c.blockWasmUsed[calcID] > c.params.PerCalcWasmGasPerBlock {
+			_ = c.killCalculatorLocked(calcID, "wasm_gas_per_block_exceeded")
+			return 0, fmt.Errorf("place_bet: per-block WASM gas exceeded (used %d)", c.blockWasmUsed[calcID])
+		}
+		if c.blockSdkUsed[calcID] > c.params.PerCalcSdkGasPerBlock {
+			_ = c.killCalculatorLocked(calcID, "sdk_gas_per_block_exceeded")
+			return 0, fmt.Errorf("place_bet: per-block SDK gas exceeded (used %d)", c.blockSdkUsed[calcID])
 		}
 
 		c.reinstantiateIfNeeded(calcID)
@@ -117,9 +129,12 @@ func (c *Chain) BetAction(addr string, betID uint64, action []byte) error {
 
 	c.activeCalcID = bet.CalculatorID
 	ctx, _, _ := c.wasmCtxForGame(bet.CalculatorID)
-	c.currentGasBudget = c.params.GasMaxPerBlock
+	budget := c.computeGasBudget(bet.CalculatorID)
+	if budget == 0 {
+		return fmt.Errorf("bet_action: per-block WASM gas budget exhausted for calc %d", bet.CalculatorID)
+	}
+	c.currentGasBudget = budget
 
-	// Snapshot WASM gas before call.
 	var gasBefore uint64
 	if game.inst.gasGlobal != nil {
 		gasBefore = game.inst.gasGlobal.Get()
@@ -128,11 +143,19 @@ func (c *Chain) BetAction(addr string, betID uint64, action []byte) error {
 
 	status, err := game.inst.callBetAction(ctx, betID, action)
 
-	// Deduct gas from balance. Kill if over per-call cap or balance exhausted.
 	used := c.totalGasUsed(bet.CalculatorID)
+	c.blockWasmUsed[bet.CalculatorID] += used
 	if !c.deductGas(bet.CalculatorID, used) {
 		_ = c.killCalculatorLocked(bet.CalculatorID, "gas_balance_exhausted")
 		return fmt.Errorf("bet_action: gas balance exhausted (used %d)", used)
+	}
+	if c.blockWasmUsed[bet.CalculatorID] > c.params.PerCalcWasmGasPerBlock {
+		_ = c.killCalculatorLocked(bet.CalculatorID, "wasm_gas_per_block_exceeded")
+		return fmt.Errorf("bet_action: per-block WASM gas exceeded (used %d)", c.blockWasmUsed[bet.CalculatorID])
+	}
+	if c.blockSdkUsed[bet.CalculatorID] > c.params.PerCalcSdkGasPerBlock {
+		_ = c.killCalculatorLocked(bet.CalculatorID, "sdk_gas_per_block_exceeded")
+		return fmt.Errorf("bet_action: per-block SDK gas exceeded (used %d)", c.blockSdkUsed[bet.CalculatorID])
 	}
 
 	c.reinstantiateIfNeeded(bet.CalculatorID)
