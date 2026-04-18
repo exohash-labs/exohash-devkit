@@ -179,7 +179,38 @@ func (s *Server) mux() http.Handler {
 	mux.HandleFunc("/cosmos/base/tendermint/v1beta1/node_info", s.handleCosmosNodeInfo)
 	mux.HandleFunc("/cosmos/tx/v1beta1/txs", s.handleCosmosBroadcast)
 	mux.HandleFunc("/cosmos/authz/v1beta1/grants", s.handleCosmosGrants)
+
+	// Mirror the chain REST endpoint the UI calls to fetch bankroll info.
+	mux.HandleFunc("/house/types/bankrolls", s.handleHouseBankrolls)
 	return corsMiddleware(mux)
+}
+
+// handleHouseBankrolls mirrors the Cosmos gRPC-gateway endpoint
+// /house/types/bankrolls. The UI uses it to display bankroll balance and
+// max-payout cap on each game page. Shape matches the real chain response.
+func (s *Server) handleHouseBankrolls(w http.ResponseWriter, _ *http.Request) {
+	type bankrollOut struct {
+		ID              string `json:"id"`
+		MaxPayoutCapBps uint32 `json:"max_payout_cap_bps"`
+		Name            string `json:"name"`
+	}
+	type viewOut struct {
+		Bankroll bankrollOut `json:"bankroll"`
+		Balance  string      `json:"balance"`
+	}
+	views := []viewOut{}
+	for _, br := range s.chain.ListBankrolls() {
+		views = append(views, viewOut{
+			Bankroll: bankrollOut{
+				ID:              fmt.Sprintf("%d", br.ID),
+				MaxPayoutCapBps: br.MaxPayoutCapBps,
+				Name:            br.Name,
+			},
+			Balance: fmt.Sprintf("%d", br.Balance),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"views": views})
 }
 
 // ---------------------------------------------------------------------------

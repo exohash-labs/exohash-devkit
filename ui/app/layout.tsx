@@ -18,7 +18,7 @@ const display = Space_Grotesk({
 const orbitron = Orbitron({
   subsets: ["latin"],
   variable: "--font-orbitron",
-  weight: ["400", "500", "600", "700"],
+  weight: ["400", "500", "600", "700", "800", "900"],
 });
 
 export const metadata: Metadata = {
@@ -58,6 +58,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "if(location.pathname==='/'&&!localStorage.getItem('exohash_intro_seen'))location.replace('/intro');",
+          }}
+        />
+      </head>
       <body className={`${mono.variable} ${display.variable} ${orbitron.variable} font-mono antialiased`}>
         <Providers>{children}</Providers>
       </body>

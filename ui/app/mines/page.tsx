@@ -886,7 +886,7 @@ function MinesGame() {
 
 export default function MinesPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-[#8a8070]">Loading...</div>}>
+    <Suspense fallback={<PagePreloader />}>
       <MinesGame />
     </Suspense>
   );

@@ -1,0 +1,170 @@
+.root {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background:
+    radial-gradient(ellipse at center, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0.92) 100%),
+    url("/hero-bg.webp") center / cover no-repeat #000;
+  font-family: var(--font-display), sans-serif;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 380ms ease-out;
+}
+
+.fading {
+  opacity: 0;
+}
+
+.content {
+  position: relative;
+  z-index: 10;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4rem 1.25rem 2.5rem;
+  gap: clamp(1.4rem, 3.5vw, 2.6rem);
+}
+
+.logo {
+  font-family: var(--font-orbitron), sans-serif;
+  font-size: clamp(2.8rem, 9vw, 6.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  text-shadow:
+    0 0 10px #facc15,
+    0 0 20px #eab308,
+    0 0 30px #ca8a04,
+    0 2px 30px rgba(0, 0, 0, 0.7),
+    0 4px 60px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  line-height: 1;
+  animation: logoEnter 1.6s ease-out forwards, glowPulse 5s ease-in-out infinite;
+}
+
+.headline {
+  font-family: var(--font-orbitron), sans-serif;
+  font-size: clamp(1.25rem, 5.6vw, 3.1rem);
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1.1;
+  color: #fff;
+  max-width: 880px;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  animation: fadeUp 1.3s 0.8s ease-out forwards;
+}
+
+.taglines {
+  max-width: 620px;
+  opacity: 0;
+  animation: fadeUp 1.5s 1.5s ease-out forwards;
+}
+
+.taglines p {
+  font-size: clamp(0.78rem, 2.3vw, 1.1rem);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.92);
+  line-height: 1.5;
+  margin-bottom: 0.3rem;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.7);
+}
+
+.enterBtn {
+  font-family: var(--font-orbitron), sans-serif;
+  font-size: clamp(0.95rem, 2.2vw, 1.2rem);
+  font-weight: 800;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(90deg, #c026d3 0%, #a855f7 100%);
+  border: none;
+  padding: 16px 56px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 0 30px rgba(192, 38, 211, 0.6);
+  opacity: 0;
+  animation: fadeUp 1.5s 2.2s ease-out forwards, btnPulse 2.6s 3.5s ease-in-out infinite;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.enterBtn:hover {
+  transform: translateY(-2px) scale(1.05);
+  background: linear-gradient(90deg, #db2777 0%, #c026d3 100%);
+  box-shadow: 0 0 45px rgba(192, 38, 211, 0.8);
+}
+
+.enterBtn:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.skip {
+  position: absolute;
+  top: max(20px, env(safe-area-inset-top));
+  right: max(20px, env(safe-area-inset-right));
+  font-family: var(--font-orbitron), sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px 4px;
+  z-index: 20;
+  transition: color 0.3s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.skip:hover,
+.skip:active {
+  color: #facc15;
+}
+
+@keyframes logoEnter {
+  to { opacity: 1; }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(25px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glowPulse {
+  0%, 100% {
+    text-shadow:
+      0 0 10px #facc15, 0 0 20px #eab308, 0 0 30px #ca8a04,
+      0 2px 30px rgba(0, 0, 0, 0.7), 0 4px 60px rgba(0, 0, 0, 0.3);
+  }
+  50% {
+    text-shadow:
+      0 0 12px #facc15, 0 0 24px #eab308, 0 0 36px #ca8a04,
+      0 2px 30px rgba(0, 0, 0, 0.7), 0 4px 60px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@keyframes btnPulse {
+  0%, 100% { box-shadow: 0 0 30px rgba(192, 38, 211, 0.6); }
+  50% { box-shadow: 0 0 45px rgba(192, 38, 211, 0.85); }
+}
+
+@media (max-width: 480px) {
+  .content { padding: 3rem 1rem 2rem; gap: 1.2rem; }
+  .taglines p { letter-spacing: 0.1em; line-height: 1.55; }
+  .enterBtn { padding: 14px 38px; }
+}
+
+@media (max-height: 520px) {
+  .content { gap: 0.9rem; padding-top: 2.5rem; padding-bottom: 1.5rem; }
+  .logo { font-size: clamp(2rem, 8vh, 4rem); }
+  .headline { font-size: clamp(1rem, 3.5vh, 1.6rem); }
+  .taglines p { font-size: clamp(0.65rem, 2vh, 0.95rem); line-height: 1.4; }
+  .enterBtn { padding: 12px 32px; font-size: 0.9rem; }
+}

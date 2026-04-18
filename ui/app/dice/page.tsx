@@ -663,7 +663,7 @@ function DiceGame() {
 
 export default function DicePage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-zinc-500">Loading...</div>}>
+    <Suspense fallback={<PagePreloader />}>
       <DiceGame />
     </Suspense>
   );

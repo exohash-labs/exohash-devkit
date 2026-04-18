@@ -32,30 +32,6 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #1e2235; border-radius: 2px; }
 
-/* ── Rich atmospheric background ── */
-.atmosphere {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
-  background:
-    url("/hero-bg.png") center top / cover no-repeat,
-    linear-gradient(180deg, #111520 0%, #0a0d14 40%, #060810 100%);
-}
-
-.atmosphere::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    180deg,
-    rgba(6, 8, 16, 0.05) 0%,
-    rgba(6, 8, 16, 0.25) 45%,
-    rgba(6, 8, 16, 0.85) 100%
-  );
-}
-
 /* ── Entrance animations ── */
 @keyframes fade-in-up {
   from { opacity: 0; transform: translateY(20px); }
@@ -319,7 +295,7 @@ body {
   content: "";
   position: fixed;
   inset: 0;
-  background: url("/mines-bg.jpg") center bottom / cover no-repeat;
+  background: url("/hero-bg.webp") center bottom / cover no-repeat;
   opacity: 0.7;
   pointer-events: none;
 }

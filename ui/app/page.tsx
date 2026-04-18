@@ -93,7 +93,6 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen flex flex-col relative page-bg">
-
       <Header balance={usdcBalance} />
 
       {/* ── MAIN ── */}
