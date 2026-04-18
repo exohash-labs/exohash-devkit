@@ -285,7 +285,7 @@ ui/                    Next.js reference casino frontend (exohash-play snapshot)
 Game-only iteration (no node) — run the chain simulator test suite per game:
 ```bash
 git clone https://github.com/exohash-labs/exohash-devkit
-cd exohash-devkit/games/dice && go run .    # house edge + error semantics + gas
+cd exohash-devkit/games/dice && go test ./tests/...   # smoke + deterministic 10M-round PnL
 ```
 
 Frontend dev (mock backend, no node):
@@ -301,11 +301,11 @@ End-to-end dev stack (real node + BFF + bots + UI) lives in the main
 ### Building a new WASM game
 ```bash
 # Write your game in Go (see games/dice/ for the reference template)
-mkdir mygame && cd mygame
-# ... write main.go with exports: place_bet, block_update, info, alloc ...
-tinygo build -o mygame.wasm -target=wasi -no-debug -opt=2 .
+mkdir -p mygame/src && cd mygame
+# ... write src/main.go with exports: place_bet, block_update, info, alloc ...
+tinygo build -o mygame.wasm -target=wasi -opt=z -no-debug ./src
 
-# Test against chainsim first (add a sim harness under tests/mygame),
+# Test against chainsim first (add tests under mygame/tests/, see games/dice/tests/),
 # then deploy to the chain (see below).
 ```
 

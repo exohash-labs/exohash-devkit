@@ -38,14 +38,14 @@ Logs land in `.devkit/{bffsim,ui,bots}.log`. The three services are described in
 Write Go, compile with TinyGo, test against chainsim.
 
 ```bash
-# Run the shipped test suites — house edge, error semantics, gas accounting
-cd games/dice && go run .
-cd games/mines && go run .
-cd games/crash && go run .
+# Run the shipped test suites — smoke tests + deterministic 10M-round PnL
+cd games/dice && go test ./tests/...
+cd games/mines && go test ./tests/...
+cd games/crash && go test ./tests/...
 
 # Build your own
 cd games/dice
-tinygo build -o dice.wasm -target=wasi -no-debug -opt=2 .
+tinygo build -o dice.wasm -target=wasi -opt=z -no-debug ./src
 ```
 
 Start from the complete dice template in [`CLAUDE_PROMPT.md`](CLAUDE_PROMPT.md). Or paste that file into Claude / ChatGPT and say: *"Build me a blackjack game."*
@@ -109,6 +109,7 @@ bots.yaml              Bot strategies
 | GET  | `/stream?games=1,2&address=x` | SSE event stream (replay + live) |
 | POST | `/relay/place-bet`            | Place a bet (relay-signed) |
 | POST | `/relay/bet-action`           | Player action (reveal, cashout, hit…) |
+| GET  | `/relay/info`                 | Relay address + capabilities (UI signer uses this) |
 | POST | `/faucet/request`             | Fund test account (100 USDC) |
 | GET  | `/account/{addr}/balance`     | Account balance |
 | GET  | `/account/{addr}/bets`        | Player bet history |
@@ -116,6 +117,7 @@ bots.yaml              Bot strategies
 | GET  | `/games`                      | Registered games (calcId, bankrollId, wasmHash, edge) |
 | GET  | `/game/{id}/info`             | Single game details |
 | GET  | `/health`                     | Server status |
+| GET  | `/house/types/bankrolls`      | Bankroll list — mirrors chain REST shape (balance, max payout cap) |
 | GET  | `/cosmos/auth/v1beta1/accounts/{addr}` | Cosmos account mock (for UI signer) |
 | GET  | `/cosmos/base/tendermint/v1beta1/node_info` | Cosmos node info mock |
 | POST | `/cosmos/tx/v1beta1/txs`      | Cosmos broadcast mock |

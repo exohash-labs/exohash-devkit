@@ -1,0 +1,15 @@
+=== Dice — smoke test ===
+
+--- 1. WinAndLoss (5 bets, 50% chance) ---
+  wins=1 losses=4
+  ✓ all 5 bets settled
+
+--- 2. ChanceOutOfRange ---
+  chance=99: place_bet rejected (status=2)
+  chance=9900: place_bet rejected (status=2)
+  ✓ both rejected with status=2
+
+--- 3. Reject101PerBlock (per-block bet cap) ---
+  succeeded=100 failure=place_bet rejected (status=4)
+  ✓ 100 placed; 101st rejected with status=4 (block full)
+
