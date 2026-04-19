@@ -11,7 +11,7 @@ Use this as:
 ## Run against bffsim (default)
 
 ```bash
-# Prerequisites: bffsim running on :4000
+# Prerequisites: bffsim running on :3100
 # (from repo root: go run ./cmd/bffsim)
 
 npm install

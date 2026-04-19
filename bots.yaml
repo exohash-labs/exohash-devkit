@@ -1,4 +1,4 @@
-bffUrl: http://localhost:4000
+bffUrl: http://localhost:3100
 
 crash:
   - name: crash-safe

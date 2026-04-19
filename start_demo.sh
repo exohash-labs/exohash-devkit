@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # start_demo.sh — one-shot launcher for the devkit demo.
 #
-#   ./start_demo.sh              build + start bffsim :4000, UI :3001, 15 bots
+#   ./start_demo.sh              build + start bffsim :3100, UI :3001, 15 bots
 #   ./start_demo.sh --no-bots    skip bot-runner
 #   ./start_demo.sh --dev        use `npm run dev` instead of prod build (hot reload, slower)
 #   ./start_demo.sh stop         stop everything started by this script
@@ -22,7 +22,7 @@ BFFSIM_LOG="$STATE_DIR/bffsim.log"
 BOTS_LOG="$STATE_DIR/bots.log"
 UI_LOG="$STATE_DIR/ui.log"
 
-BFFSIM_PORT=4000
+BFFSIM_PORT=3100
 UI_PORT=3001
 
 mkdir -p "$STATE_DIR"

@@ -1,6 +1,6 @@
 # bffsim
 
-Mock HTTP/SSE **Backend-For-Frontend** on `:4000`. Wraps [`chainsim`](../../chainsim) so the UI (or any HTTP client) gets the same endpoints as the real ExoHash BFF — with a block ticking every 500ms in memory.
+Mock HTTP/SSE **Backend-For-Frontend** on `:3100`. Wraps [`chainsim`](../../chainsim) so the UI (or any HTTP client) gets the same endpoints as the real ExoHash BFF — with a block ticking every 500ms in memory.
 
 ## Why it exists
 

@@ -51,7 +51,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	if cfg.Port == 0 {
-		cfg.Port = 4000
+		cfg.Port = 3100
 	}
 	if cfg.Seed == 0 {
 		cfg.Seed = 42

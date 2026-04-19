@@ -72,7 +72,7 @@ function DiceGame() {
     ts: number;
   };
   const recentBets = useBetFeed<DiceBet>(gameId, ["settle"], (_ce, d) => ({
-    betId: d.entry_id,
+    betId: d.bet_id,
     bettor: d.addr || "",
     stake: String(d.stake || "0"),
     payout: String(d.payout || "0"),

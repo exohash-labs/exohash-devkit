@@ -61,7 +61,7 @@ export function useWaitForBet(
       const matchedBetId = settlement.betId;
       const calcEvent = lastEvent.games?.[0]?.crashRound ? null :
         (lastEvent as any).calcEvents?.find((e: any) => {
-          try { return JSON.parse(e.data).entry_id === matchedBetId; } catch { return false; }
+          try { return JSON.parse(e.data).bet_id === matchedBetId; } catch { return false; }
         });
       let engineResult: any = null;
       if (calcEvent) {

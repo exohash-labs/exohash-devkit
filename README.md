@@ -14,7 +14,7 @@ Everything you need to build and test ExoHash games and frontends locally — **
 
 - **`chainsim/`** — in-memory Go simulator with real WASM execution, beacon randomness, bankroll accounting
 - **`games/`** — 3 reference games (dice, crash, mines) — Go source + compiled WASM + test suite per game
-- **`cmd/bffsim/`** — mock HTTP/SSE BFF on `:4000` that wraps chainsim; Cosmos REST endpoints mocked so the UI runs unchanged
+- **`cmd/bffsim/`** — mock HTTP/SSE BFF on `:3100` that wraps chainsim; Cosmos REST endpoints mocked so the UI runs unchanged
 - **`ui/`** — full Next.js casino frontend (snapshot of `exohash-play`) — wallet, signer, SSE feed, game pages
 - **`bots/` + `cmd/bot-runner/`** — 15 configurable bots that place live bets across all three games
 - **`CLAUDE_PROMPT.md`** — full developer reference (protocol, WASM API, game patterns, complete dice template)
@@ -22,7 +22,7 @@ Everything you need to build and test ExoHash games and frontends locally — **
 ## Quick demo
 
 ```bash
-./start_demo.sh              # builds + runs bffsim :4000, UI :3001, 15 bots
+./start_demo.sh              # builds + runs bffsim :3100, UI :3001, 15 bots
 ./start_demo.sh --no-bots    # skip the bots
 ./start_demo.sh --dev        # `npm run dev` instead of prod build (hot reload)
 ./start_demo.sh stop         # shut everything down
@@ -55,7 +55,7 @@ Start from the complete dice template in [`CLAUDE_PROMPT.md`](CLAUDE_PROMPT.md).
 Run the mock backend, develop against real chain behavior:
 
 ```bash
-# Terminal 1 — mock chain + BFF on :4000
+# Terminal 1 — mock chain + BFF on :3100
 go run ./cmd/bffsim
 
 # Terminal 2 — reference UI on :3001
@@ -94,7 +94,7 @@ games/                 Reference games (source + compiled WASM + test suite)
   dice/                Solo instant — bet, roll, settle next block
   mines/               Solo multi-step — reveal tiles, cashout anytime
   crash/               Multiplayer session — rising multiplier, multi-player cashouts
-cmd/bffsim/            Mock HTTP/SSE BFF (:4000) wrapping chainsim
+cmd/bffsim/            Mock HTTP/SSE BFF (:3100) wrapping chainsim
 cmd/bot-runner/        Bot runner process (reads bots.yaml)
 bots/                  Bot implementations (dice, crash, mines) + SSE client
 ui/                    Next.js casino frontend (exohash-play snapshot)

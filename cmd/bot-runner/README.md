@@ -21,7 +21,7 @@ When `BOT_ADDRS` is **set**, each comma-separated address is used as-is. This is
 [`bots.yaml`](../../bots.yaml) at the repo root:
 
 ```yaml
-bffUrl: http://localhost:4000
+bffUrl: http://localhost:3100
 
 crash:
   - { name: crash-safe,  stake: 1000000, cashout: 12000 }   # target 1.2x

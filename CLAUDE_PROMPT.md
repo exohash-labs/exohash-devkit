@@ -275,7 +275,7 @@ games/                 Reference games: source + compiled WASM + test suite per 
   dice/                Solo instant game (~36KB WASM)
   mines/               Solo multi-action game (~33KB WASM)
   crash/               Session multiplayer game (~38KB WASM)
-cmd/bffsim/            Mock HTTP/SSE BFF on :4000 wrapping chainsim
+cmd/bffsim/            Mock HTTP/SSE BFF on :3100 wrapping chainsim
 cmd/bot-runner/        Bot runner process
 bots/                  Bot framework — HTTP clients that play games
 ui/                    Next.js reference casino frontend (exohash-play snapshot)
@@ -290,7 +290,7 @@ cd exohash-devkit/games/dice && go test ./tests/...   # smoke + deterministic 10
 
 Frontend dev (mock backend, no node):
 ```bash
-go run ./cmd/bffsim                                    # terminal 1 — :4000
+go run ./cmd/bffsim                                    # terminal 1 — :3100
 cd ui && npm install && npm run build && npm start -- --port 3001   # terminal 2 — :3001
 go run ./cmd/bot-runner                                # terminal 3 — 15 bots (optional)
 ```
@@ -445,7 +445,7 @@ func place_bet(betID, bankrollID, calculatorID, stake uint64, paramsPtr, paramsL
 	kvSet(betKey(betID), state)
 
 	schedule_wakeup(betID, 0) // resolve next block
-	emitJSON("bet", "entry_id", betID, "stake", stake, "chance_bp", chance)
+	emitJSON("bet", "bet_id", betID, "stake", stake, "chance_bp", chance)
 	return 0
 }
 
@@ -486,7 +486,7 @@ func block_update(height uint64) {
 
 		result := "loss"
 		if win { result = "win" }
-		emitJSON("settle", "entry_id", storedID, "roll", roll, "payout", payout, "result", result)
+		emitJSON("settle", "bet_id", storedID, "roll", roll, "payout", payout, "result", result)
 	}
 }
 
@@ -515,9 +515,9 @@ func isWin(mode byte, roll, effChance uint64) bool {
 	if mode == 2 { return roll < effChance }
 	return false
 }
-func deriveRoll(seed []byte, entryID uint64) uint64 {
+func deriveRoll(seed []byte, betID uint64) uint64 {
 	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], entryID)
+	binary.BigEndian.PutUint64(buf[:], betID)
 	data := make([]byte, len(seed)+8)
 	copy(data, seed)
 	copy(data[len(seed):], buf[:])
